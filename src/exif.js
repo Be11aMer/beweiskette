@@ -3,8 +3,23 @@
  * Extracts only forensically relevant fields: DateTime, GPS, Camera Model.
  * Handles both big-endian (Motorola) and little-endian (Intel) byte orders.
  *
- * Only the first 128KB of the file is needed — EXIF data is always near the start.
- * Returns null gracefully for non-JPEG files or files without EXIF data.
+ * Two things shape the defensive posture here.
+ *
+ * First, the input is attacker-controlled. A JPEG's EXIF block is arbitrary
+ * binary chosen by whoever produced the file, and TIFF is a pointer format —
+ * IFD entries hold offsets that can point anywhere. Every read is therefore
+ * bounded by the APP1 segment's own declared length rather than by the buffer,
+ * and an out-of-range read aborts the parse instead of yielding whatever
+ * happened to be nearby.
+ *
+ * Second, whatever comes out of here is written into the entry and covered by
+ * entry_hash. Silently returning plausible-looking garbage would put that
+ * garbage in the evidence record permanently, so anything that does not parse
+ * cleanly yields null rather than a guess.
+ *
+ * Only the first 128KB of the file is read — EXIF sits near the start. The
+ * values recovered are claims made by the file, faithfully recorded, not
+ * independently verified facts. See docs/THREAT_MODEL.md.
  */
 
 const TAG_MAKE = 0x010f;
@@ -18,189 +33,225 @@ const TAG_GPS_LAT = 0x0002;
 const TAG_GPS_LNG_REF = 0x0003;
 const TAG_GPS_LNG = 0x0004;
 
+const TYPE_ASCII = 2;
+const TYPE_RATIONAL = 5;
+
 const TYPE_SIZES = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8, 12: 8 };
 
+/** Guards against an IFD claiming an implausible number of entries. */
+const MAX_IFD_ENTRIES = 512;
+
+const SOI = 0xffd8;
+const APP1 = 0xffe1;
+
 /**
- * Extract EXIF metadata from a file's ArrayBuffer.
+ * Extract EXIF metadata from a file's leading bytes.
  * Returns an object with available fields, or null if not a JPEG / no EXIF.
+ *
+ * @param {ArrayBuffer} arrayBuffer - the start of the file (see HEAD_BYTES)
  */
 export function extractExif(arrayBuffer) {
   try {
-    const maxBytes = Math.min(arrayBuffer.byteLength, 131072);
-    const view = new DataView(arrayBuffer, 0, maxBytes);
-
-    if (view.getUint16(0) !== 0xffd8) return null;
+    const view = new DataView(arrayBuffer);
+    if (view.byteLength < 4 || view.getUint16(0) !== SOI) return null;
 
     let offset = 2;
-    while (offset < view.byteLength - 4) {
+    // Walk the marker segments looking for APP1.
+    while (offset + 4 <= view.byteLength) {
       const marker = view.getUint16(offset);
-
-      if ((marker & 0xff00) !== 0xff00) break;
-
-      if (marker === 0xffe1) {
-        return parseApp1(view, offset);
-      }
+      if ((marker & 0xff00) !== 0xff00) return null;
 
       const segmentLength = view.getUint16(offset + 2);
-      offset += 2 + segmentLength;
+      // A segment length must at least cover its own length field.
+      if (segmentLength < 2) return null;
+
+      const segmentEnd = offset + 2 + segmentLength;
+      if (segmentEnd > view.byteLength) return null;
+
+      if (marker === APP1) return parseApp1(view, offset, segmentEnd);
+
+      offset = segmentEnd;
     }
 
     return null;
   } catch {
+    // Any out-of-range read lands here. A malformed file yields no metadata
+    // rather than metadata derived from misread bytes.
     return null;
   }
 }
 
-function parseApp1(view, markerOffset) {
-  const tiffStart = markerOffset + 10;
-
-  if (
-    view.getUint8(markerOffset + 4) !== 0x45 || // E
-    view.getUint8(markerOffset + 5) !== 0x78 || // x
-    view.getUint8(markerOffset + 6) !== 0x69 || // i
-    view.getUint8(markerOffset + 7) !== 0x66    // f
-  ) {
-    return null;
+function parseApp1(view, markerOffset, segmentEnd) {
+  // "Exif\0\0" then the TIFF header.
+  if (markerOffset + 10 > segmentEnd) return null;
+  const signature = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00];
+  for (let i = 0; i < signature.length; i++) {
+    if (view.getUint8(markerOffset + 4 + i) !== signature[i]) return null;
   }
+
+  const tiffStart = markerOffset + 10;
+  if (tiffStart + 8 > segmentEnd) return null;
 
   const byteOrder = view.getUint16(tiffStart);
+  if (byteOrder !== 0x4949 && byteOrder !== 0x4d4d) return null;
   const le = byteOrder === 0x4949;
 
-  const magic = getU16(view, tiffStart + 2, le);
-  if (magic !== 0x002a) return null;
+  if (view.getUint16(tiffStart + 2, le) !== 0x002a) return null;
 
-  const ifd0Offset = getU32(view, tiffStart + 4, le);
+  // All TIFF offsets are relative to tiffStart and must stay inside the
+  // segment. `segmentEnd` — not the buffer length — is the boundary, so a
+  // crafted APP1 cannot reach into unrelated parts of the file.
+  const ctx = { view, tiffStart, end: segmentEnd, le };
+
+  const ifd0 = readIFD(ctx, view.getUint32(tiffStart + 4, le));
+  if (!ifd0) return null;
 
   const result = {};
-  const ifd0Tags = readIFD(view, tiffStart, ifd0Offset, le);
 
-  if (ifd0Tags[TAG_MAKE]) {
-    result.camera_make = readAscii(view, tiffStart, ifd0Tags[TAG_MAKE], le);
-  }
-  if (ifd0Tags[TAG_MODEL]) {
-    result.camera_model = readAscii(view, tiffStart, ifd0Tags[TAG_MODEL], le);
-  }
-  if (ifd0Tags[TAG_DATETIME]) {
-    result.datetime = readAscii(view, tiffStart, ifd0Tags[TAG_DATETIME], le);
-  }
+  const make = readAscii(ctx, ifd0[TAG_MAKE]);
+  if (make) result.camera_make = make;
 
-  if (ifd0Tags[TAG_EXIF_IFD]) {
-    const exifOffset = readTagValue(view, tiffStart, ifd0Tags[TAG_EXIF_IFD], le);
-    if (exifOffset) {
-      const exifTags = readIFD(view, tiffStart, exifOffset, le);
-      if (exifTags[TAG_DATETIME_ORIGINAL]) {
-        result.datetime_original = readAscii(view, tiffStart, exifTags[TAG_DATETIME_ORIGINAL], le);
-      }
+  const model = readAscii(ctx, ifd0[TAG_MODEL]);
+  if (model) result.camera_model = model;
+
+  const datetime = readAscii(ctx, ifd0[TAG_DATETIME]);
+  if (datetime) result.datetime = datetime;
+
+  const exifOffset = readLongValue(ctx, ifd0[TAG_EXIF_IFD]);
+  if (exifOffset !== null) {
+    const exifIfd = readIFD(ctx, exifOffset);
+    if (exifIfd) {
+      const original = readAscii(ctx, exifIfd[TAG_DATETIME_ORIGINAL]);
+      if (original) result.datetime_original = original;
     }
   }
 
-  if (ifd0Tags[TAG_GPS_IFD]) {
-    const gpsOffset = readTagValue(view, tiffStart, ifd0Tags[TAG_GPS_IFD], le);
-    if (gpsOffset) {
-      const gpsTags = readIFD(view, tiffStart, gpsOffset, le);
-      const lat = readGPSCoord(view, tiffStart, gpsTags, TAG_GPS_LAT, TAG_GPS_LAT_REF, le);
-      const lng = readGPSCoord(view, tiffStart, gpsTags, TAG_GPS_LNG, TAG_GPS_LNG_REF, le);
-      if (lat !== null) result.gps_lat = lat;
-      if (lng !== null) result.gps_lng = lng;
+  const gpsOffset = readLongValue(ctx, ifd0[TAG_GPS_IFD]);
+  if (gpsOffset !== null) {
+    const gpsIfd = readIFD(ctx, gpsOffset);
+    if (gpsIfd) {
+      const lat = readGPSCoord(ctx, gpsIfd, TAG_GPS_LAT, TAG_GPS_LAT_REF, 'N', 'S', 90);
+      const lng = readGPSCoord(ctx, gpsIfd, TAG_GPS_LNG, TAG_GPS_LNG_REF, 'E', 'W', 180);
+      // Half a coordinate is not a location; record both or neither.
+      if (lat !== null && lng !== null) {
+        result.gps_lat = lat;
+        result.gps_lng = lng;
+      }
     }
   }
 
   return Object.keys(result).length > 0 ? result : null;
 }
 
-function readIFD(view, tiffStart, ifdOffset, le) {
+/** True if [start, start+length) lies within the APP1 segment. */
+function inBounds(ctx, start, length) {
+  return start >= ctx.tiffStart && length >= 0 && start + length <= ctx.end;
+}
+
+function readIFD(ctx, ifdOffset) {
+  const { view, tiffStart, le } = ctx;
+  const base = tiffStart + ifdOffset;
+  if (!inBounds(ctx, base, 2)) return null;
+
+  const count = view.getUint16(base, le);
+  if (count === 0 || count > MAX_IFD_ENTRIES) return null;
+  if (!inBounds(ctx, base + 2, count * 12)) return null;
+
   const tags = {};
-  const abs = tiffStart + ifdOffset;
-
-  if (abs + 2 > view.byteLength) return tags;
-
-  const count = getU16(view, abs, le);
-
   for (let i = 0; i < count; i++) {
-    const entryOffset = abs + 2 + i * 12;
-    if (entryOffset + 12 > view.byteLength) break;
-
-    const tagId = getU16(view, entryOffset, le);
-    tags[tagId] = {
-      type: getU16(view, entryOffset + 2, le),
-      count: getU32(view, entryOffset + 4, le),
+    const entryOffset = base + 2 + i * 12;
+    tags[view.getUint16(entryOffset, le)] = {
+      type: view.getUint16(entryOffset + 2, le),
+      count: view.getUint32(entryOffset + 4, le),
       valueOffset: entryOffset + 8,
     };
   }
-
   return tags;
 }
 
-function readTagValue(view, tiffStart, tagInfo, le) {
-  if (!tagInfo) return null;
-  const size = (TYPE_SIZES[tagInfo.type] || 1) * tagInfo.count;
-  if (size <= 4) {
-    return getU32(view, tagInfo.valueOffset, le);
-  }
-  return getU32(view, tagInfo.valueOffset, le);
+/**
+ * Resolve where a tag's value lives.
+ *
+ * Values of four bytes or fewer are stored inline in the entry; anything
+ * larger is stored elsewhere and the entry holds an offset.
+ *
+ * @returns {number|null} absolute offset of the data, or null if out of range
+ */
+function resolveValueOffset(ctx, tag) {
+  const size = (TYPE_SIZES[tag.type] || 0) * tag.count;
+  if (size === 0) return null;
+
+  const offset = size <= 4
+    ? tag.valueOffset
+    : ctx.tiffStart + ctx.view.getUint32(tag.valueOffset, ctx.le);
+
+  return inBounds(ctx, offset, size) ? offset : null;
 }
 
-function readAscii(view, tiffStart, tagInfo, le) {
-  if (!tagInfo || tagInfo.type !== 2) return null;
-
-  let dataOffset;
-  if (tagInfo.count <= 4) {
-    dataOffset = tagInfo.valueOffset;
-  } else {
-    dataOffset = tiffStart + getU32(view, tagInfo.valueOffset, le);
-  }
-
-  if (dataOffset + tagInfo.count > view.byteLength) return null;
-
-  let str = '';
-  for (let i = 0; i < tagInfo.count - 1; i++) {
-    const c = view.getUint8(dataOffset + i);
-    if (c === 0) break;
-    str += String.fromCharCode(c);
-  }
-  return str || null;
+/** Read a single LONG value (used for the sub-IFD pointers). */
+function readLongValue(ctx, tag) {
+  if (!tag || tag.count !== 1) return null;
+  if (tag.type !== 4 && tag.type !== 3) return null;
+  return ctx.view.getUint32(tag.valueOffset, ctx.le);
 }
 
-function readGPSCoord(view, tiffStart, gpsTags, coordTag, refTag, le) {
-  if (!gpsTags[coordTag] || !gpsTags[refTag]) return null;
+function readAscii(ctx, tag) {
+  if (!tag || tag.type !== TYPE_ASCII || tag.count === 0) return null;
 
-  const refInfo = gpsTags[refTag];
-  const ref = String.fromCharCode(view.getUint8(refInfo.valueOffset));
+  const offset = resolveValueOffset(ctx, tag);
+  if (offset === null) return null;
 
-  const coordInfo = gpsTags[coordTag];
-  if (coordInfo.type !== 5 || coordInfo.count !== 3) return null;
+  const bytes = new Uint8Array(ctx.view.buffer, ctx.view.byteOffset + offset, tag.count);
 
-  const dataOffset = tiffStart + getU32(view, coordInfo.valueOffset, le);
-  if (dataOffset + 24 > view.byteLength) return null;
+  // Stop at the first NUL: EXIF ASCII strings are NUL-terminated and the
+  // declared count includes the terminator.
+  let length = bytes.indexOf(0);
+  if (length === -1) length = bytes.length;
+  if (length === 0) return null;
 
-  const degNum = getU32(view, dataOffset, le);
-  const degDen = getU32(view, dataOffset + 4, le);
-  const minNum = getU32(view, dataOffset + 8, le);
-  const minDen = getU32(view, dataOffset + 12, le);
-  const secNum = getU32(view, dataOffset + 16, le);
-  const secDen = getU32(view, dataOffset + 20, le);
+  // Decoded as UTF-8 rather than byte-by-byte via String.fromCharCode, which
+  // treated the bytes as Latin-1 and turned any non-ASCII camera name into
+  // mojibake — mojibake that then got hashed into the evidence record.
+  // Malformed sequences become U+FFFD rather than throwing.
+  const text = new TextDecoder('utf-8').decode(bytes.subarray(0, length)).trim();
+  return text.length > 0 ? text : null;
+}
 
-  if (degDen === 0 || minDen === 0 || secDen === 0) return null;
+/**
+ * Read a GPS coordinate as degrees/minutes/seconds and convert to decimal.
+ * Returned as a fixed 6-decimal string — see canonical.js on why the hashed
+ * payload carries no floats.
+ */
+function readGPSCoord(ctx, gpsTags, coordTag, refTag, positiveRef, negativeRef, maxAbs) {
+  const coord = gpsTags[coordTag];
+  const ref = gpsTags[refTag];
+  if (!coord || !ref) return null;
 
-  let decimal = degNum / degDen + minNum / minDen / 60 + secNum / secDen / 3600;
+  if (coord.type !== TYPE_RATIONAL || coord.count !== 3) return null;
+  if (ref.type !== TYPE_ASCII) return null;
 
-  if (ref === 'S' || ref === 'W') decimal = -decimal;
-  if (!Number.isFinite(decimal) || Math.abs(decimal) > 180) return null;
+  const refChar = String.fromCharCode(ctx.view.getUint8(ref.valueOffset)).toUpperCase();
+  // Previously any unrecognized ref silently meant North/East, so a corrupt
+  // hemisphere byte produced a confidently wrong location.
+  if (refChar !== positiveRef && refChar !== negativeRef) return null;
 
-  // Returned as a fixed 6-decimal string, not a number. The canonical encoder
-  // rejects non-integer numbers because JavaScript and Python format floats
-  // differently — JS renders 52.0 as "52", Python as "52.0" — which would give
-  // the same entry two different hashes in the two tools. A fixed-width
-  // decimal string is unambiguous everywhere.
+  const offset = resolveValueOffset(ctx, coord);
+  if (offset === null) return null;
+
+  const parts = [];
+  for (let i = 0; i < 3; i++) {
+    const numerator = ctx.view.getUint32(offset + i * 8, ctx.le);
+    const denominator = ctx.view.getUint32(offset + i * 8 + 4, ctx.le);
+    if (denominator === 0) return null;
+    parts.push(numerator / denominator);
+  }
+
+  const [degrees, minutes, seconds] = parts;
+  if (minutes >= 60 || seconds >= 60) return null;
+
+  let decimal = degrees + minutes / 60 + seconds / 3600;
+  if (!Number.isFinite(decimal) || decimal > maxAbs) return null;
+  if (refChar === negativeRef) decimal = -decimal;
+
   return decimal.toFixed(6);
-}
-
-function getU16(view, offset, le) {
-  if (offset + 2 > view.byteLength) return 0;
-  return view.getUint16(offset, le);
-}
-
-function getU32(view, offset, le) {
-  if (offset + 4 > view.byteLength) return 0;
-  return view.getUint32(offset, le);
 }

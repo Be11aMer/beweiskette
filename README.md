@@ -138,7 +138,8 @@ execution anyway. It is hygiene.
 ```
 src/
 ├── main.js        App shell, tab routing, storage-durability check
-├── crypto.js      Web Crypto API (SHA-256) wrappers
+├── crypto.js      Hashing entry points; picks buffered vs streaming
+├── sha256.js      Incremental SHA-256, for files too large to buffer
 ├── canonical.js   Canonical JSON encoder — the exact bytes that get hashed
 ├── chain.js       Chain construction, validation, verification
 ├── anchor.js      Head receipts and anchor checking
@@ -151,6 +152,12 @@ src/
 
 `canonical.js` is deliberately self-contained: `report.js` embeds its source
 verbatim so the offline report and the app cannot drift apart.
+
+Files up to 64 MB are hashed with the Web Crypto API. Above that they are
+streamed through `sha256.js`, because `crypto.subtle.digest()` needs the whole
+input in memory at once and evidence files run large. Both paths are verified
+to produce identical digests, against the FIPS 180-4 vectors and directly
+against Web Crypto.
 
 **Zero runtime dependencies.** Vanilla JavaScript, vanilla CSS. Vite is a dev
 server and build tool only; the tests use Node's built-in runner. Production

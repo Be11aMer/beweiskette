@@ -3,7 +3,7 @@
  * Drop zone for files, hash computation, EXIF extraction, custody form.
  */
 
-import { hashFile } from '../crypto.js';
+import { hashFileWithHead } from '../crypto.js';
 import { extractExif } from '../exif.js';
 import { createEntry, createChainId } from '../chain.js';
 import { addEntry, getChainState } from '../store.js';
@@ -105,16 +105,22 @@ async function processFile(file, container) {
     <div class="file-info">
       <div class="file-info-row">
         <span class="file-info-label">Computing hash</span>
-        <span class="file-info-value">...</span>
+        <span class="file-info-value" id="hash-progress">…</span>
       </div>
     </div>
   `;
+  const progressEl = infoSection.querySelector('#hash-progress');
 
   try {
-    currentFileHash = await hashFile(file);
-
-    const buffer = await file.arrayBuffer();
-    currentExif = extractExif(buffer);
+    // One read: the digest and the bytes EXIF needs come from the same pass,
+    // so the recorded hash and metadata cannot describe different bytes.
+    const { hash, head } = await hashFileWithHead(file, {
+      onProgress: (fraction) => {
+        if (progressEl) progressEl.textContent = `${Math.round(fraction * 100)}%`;
+      },
+    });
+    currentFileHash = hash;
+    currentExif = extractExif(head);
 
     let exifHTML = '';
     if (currentExif) {
