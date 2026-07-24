@@ -7,7 +7,7 @@ import { hashFile } from '../crypto.js';
 import { extractExif } from '../exif.js';
 import { createEntry, GENESIS } from '../chain.js';
 import { addEntry, getLastEntry } from '../store.js';
-import { formatFileSize, truncateHash, sanitizeText } from '../utils.js';
+import { formatFileSize, truncateHash, sanitizeText, html } from '../utils.js';
 import { showToast, navigateTo } from '../main.js';
 
 let currentFile = null;
@@ -19,7 +19,7 @@ export function render(container) {
   currentFileHash = null;
   currentExif = null;
 
-  container.innerHTML = `
+  container.innerHTML = html`
     <div class="drop-zone" id="drop-zone">
       <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -101,7 +101,7 @@ async function processFile(file, container) {
   const formSection = container.querySelector('#custody-form-section');
   const registerBtn = container.querySelector('#register-btn');
 
-  infoSection.innerHTML = `
+  infoSection.innerHTML = html`
     <div class="file-info">
       <div class="file-info-row">
         <span class="file-info-label">Computing hash</span>
@@ -129,26 +129,26 @@ async function processFile(file, container) {
         fields.push(['GPS', `${currentExif.gps_lat}, ${currentExif.gps_lng}`]);
       }
       if (fields.length > 0) {
-        exifHTML = `
+        exifHTML = html`
           <div class="file-info-row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px">
             <span class="file-info-label" style="color:var(--accent)">EXIF Metadata</span>
             <span class="file-info-value" style="font-size:0.73rem;color:var(--text-muted)">Extracted from file</span>
           </div>
-          ${fields.map(([label, value]) => `
+          ${fields.map(([label, value]) => html`
             <div class="file-info-row">
               <span class="file-info-label">${label}</span>
-              <span class="file-info-value">${sanitizeText(String(value))}</span>
+              <span class="file-info-value">${String(value)}</span>
             </div>
-          `).join('')}
+          `)}
         `;
       }
     }
 
-    infoSection.innerHTML = `
+    infoSection.innerHTML = html`
       <div class="file-info">
         <div class="file-info-row">
           <span class="file-info-label">File Name</span>
-          <span class="file-info-value">${sanitizeText(file.name)}</span>
+          <span class="file-info-value">${file.name}</span>
         </div>
         <div class="file-info-row">
           <span class="file-info-label">Size</span>
@@ -156,7 +156,7 @@ async function processFile(file, container) {
         </div>
         <div class="file-info-row">
           <span class="file-info-label">Type</span>
-          <span class="file-info-value">${sanitizeText(file.type || 'unknown')}</span>
+          <span class="file-info-value">${file.type || 'unknown'}</span>
         </div>
         <div class="file-info-row">
           <span class="file-info-label">Last Modified</span>
@@ -173,7 +173,7 @@ async function processFile(file, container) {
     formSection.style.display = 'block';
     registerBtn.disabled = false;
   } catch (err) {
-    infoSection.innerHTML = `
+    infoSection.innerHTML = html`
       <div class="file-info" style="border-color:var(--danger-border)">
         <div class="file-info-row">
           <span class="file-info-label" style="color:var(--danger)">Error</span>
