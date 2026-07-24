@@ -1,0 +1,16 @@
+{
+  "name": "beweiskette",
+  "version": "1.0.0",
+  "description": "Digital evidence chain of custody — zero-runtime-dependency web app",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && npx wrangler pages deploy dist"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
