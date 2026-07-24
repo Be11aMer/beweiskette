@@ -1,0 +1,157 @@
+{
+  "description": "Cross-implementation canonicalization vectors for Beweiskette and Zeitkette. Any implementation claiming compatibility must reproduce canonical and sha256 exactly for each value.",
+  "python_equivalent": "json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)",
+  "note": "ensure_ascii=False is required and is NOT the Python default. Python sorts keys by code point; JavaScript needs an explicit comparator to match.",
+  "vectors": [
+    {
+      "name": "empty object",
+      "value": {},
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty array",
+      "value": [],
+      "canonical": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "ascii keys unsorted",
+      "value": {
+        "zebra": 1,
+        "alpha": 2,
+        "mike": 3
+      },
+      "canonical": "{\"alpha\":2,\"mike\":3,\"zebra\":1}",
+      "sha256": "dcad269a69e802a84cd0c6b922d009f22bf53ebc04159369437f4c5b52435298"
+    },
+    {
+      "name": "nested sorting",
+      "value": {
+        "b": {
+          "z": 1,
+          "a": 2
+        },
+        "a": {
+          "y": 3,
+          "b": 4
+        }
+      },
+      "canonical": "{\"a\":{\"b\":4,\"y\":3},\"b\":{\"a\":2,\"z\":1}}",
+      "sha256": "014fba3de87da23346ee3827a96280da71798a1b58b6e7e9deeb8c043b32899b"
+    },
+    {
+      "name": "scalars",
+      "value": {
+        "t": true,
+        "f": false,
+        "n": null,
+        "i": 0,
+        "neg": -42
+      },
+      "canonical": "{\"f\":false,\"i\":0,\"n\":null,\"neg\":-42,\"t\":true}",
+      "sha256": "6b4c32ccf555c5160548e9b7ec8699c375be42ff699bfca82560eb0d7bb4617a"
+    },
+    {
+      "name": "array order preserved",
+      "value": {
+        "list": [
+          3,
+          1,
+          2,
+          "x",
+          null
+        ]
+      },
+      "canonical": "{\"list\":[3,1,2,\"x\",null]}",
+      "sha256": "793f4dd964df9d267ac7f3586a5edcc46da1015d725e5a685710dca487d60360"
+    },
+    {
+      "name": "string escaping",
+      "value": {
+        "s": "quote \" backslash \\ newline \n tab \t"
+      },
+      "canonical": "{\"s\":\"quote \\\" backslash \\\\ newline \\n tab \\t\"}",
+      "sha256": "7a475e86b9a0007817692d7e8a99d392c802c5dc79e02aca62f655502e50ce14"
+    },
+    {
+      "name": "non-ascii latin",
+      "value": {
+        "custodian": "Jörg Müller",
+        "street": "Hauptstraße"
+      },
+      "canonical": "{\"custodian\":\"Jörg Müller\",\"street\":\"Hauptstraße\"}",
+      "sha256": "f8e9c50d4804e36940403169054a4f65cf7b3a14b2f07485da66aa7119621fd2"
+    },
+    {
+      "name": "non-ascii keys",
+      "value": {
+        "ü": 1,
+        "a": 2,
+        "z": 3,
+        "Ä": 4
+      },
+      "canonical": "{\"a\":2,\"z\":3,\"Ä\":4,\"ü\":1}",
+      "sha256": "a73aa9647aaa87ba7851a36746fb38f612448e89d054811d22a1eb6517723ced"
+    },
+    {
+      "name": "astral vs bmp key order",
+      "value": {
+        "🔗": "chain",
+        "ﬀ": "ligature"
+      },
+      "canonical": "{\"ﬀ\":\"ligature\",\"🔗\":\"chain\"}",
+      "sha256": "dd857eb2add4207a1682211bd8f4778057da71943bce51655f13fd05aa696698"
+    },
+    {
+      "name": "cjk",
+      "value": {
+        "name": "証拠",
+        "note": "链"
+      },
+      "canonical": "{\"name\":\"証拠\",\"note\":\"链\"}",
+      "sha256": "83eff4155f7eb046747bb5d99b0f22ec1447e2c96dd396172fdb99d7e95f0945"
+    },
+    {
+      "name": "structural chars in values",
+      "value": {
+        "a": "\",\"x\":\"",
+        "b": "}{",
+        "c": "[]"
+      },
+      "canonical": "{\"a\":\"\\\",\\\"x\\\":\\\"\",\"b\":\"}{\",\"c\":\"[]\"}",
+      "sha256": "c6d5bcc86530fb76b48d9c2f716ad433a9d33d1341c3e9df9a67f2fb92612bd8"
+    },
+    {
+      "name": "realistic entry",
+      "value": {
+        "schema_version": 2,
+        "chain_id": "3f2a1b8c-4d5e-4f60-8a1b-2c3d4e5f6071",
+        "seq": 0,
+        "id": "11111111-2222-4333-8444-555555555555",
+        "timestamp_registered": "2026-07-24T12:00:00.000Z",
+        "evidence": {
+          "file_hash": "abababababababababababababababababababababababababababababababab",
+          "file_name": "Beweis Nr. 1.jpg",
+          "file_size": 204800,
+          "file_type": "image/jpeg",
+          "file_last_modified": "2026-07-01T09:15:00.000Z"
+        },
+        "metadata": {
+          "camera_make": "Canon",
+          "camera_model": "EOS 5D",
+          "gps_lat": "52.520008",
+          "gps_lng": "13.404954"
+        },
+        "custody": {
+          "custodian": "Jörg Müller",
+          "case_reference": "CASE-2026-0042",
+          "notes": "Übergabe um 09:15"
+        },
+        "prev_hash": "GENESIS"
+      },
+      "canonical": "{\"chain_id\":\"3f2a1b8c-4d5e-4f60-8a1b-2c3d4e5f6071\",\"custody\":{\"case_reference\":\"CASE-2026-0042\",\"custodian\":\"Jörg Müller\",\"notes\":\"Übergabe um 09:15\"},\"evidence\":{\"file_hash\":\"abababababababababababababababababababababababababababababababab\",\"file_last_modified\":\"2026-07-01T09:15:00.000Z\",\"file_name\":\"Beweis Nr. 1.jpg\",\"file_size\":204800,\"file_type\":\"image/jpeg\"},\"id\":\"11111111-2222-4333-8444-555555555555\",\"metadata\":{\"camera_make\":\"Canon\",\"camera_model\":\"EOS 5D\",\"gps_lat\":\"52.520008\",\"gps_lng\":\"13.404954\"},\"prev_hash\":\"GENESIS\",\"schema_version\":2,\"seq\":0,\"timestamp_registered\":\"2026-07-24T12:00:00.000Z\"}",
+      "sha256": "3398cda84e87fb0963e3849f105c7a9e39cfa336d38d876f63600440aa067071"
+    }
+  ]
+}

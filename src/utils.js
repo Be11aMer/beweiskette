@@ -1,6 +1,10 @@
 /**
  * Utility functions for Beweiskette.
- * Date formatting, hex conversion, UUID generation, deterministic serialization.
+ * Date formatting, hex conversion, UUID generation, HTML escaping.
+ *
+ * The canonical serializer that feeds the hash lives in canonical.js, kept
+ * apart because it is consensus-critical and embedded verbatim in the
+ * exported report.
  */
 
 /**
@@ -26,33 +30,6 @@ export function generateId() {
  */
 export function bufferToHex(buffer) {
   return Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Deterministic JSON serialization with recursively sorted keys and no whitespace.
- * Mirrors Python's json.dumps(obj, sort_keys=True, separators=(',', ':'))
- */
-export function sortedStringify(obj) {
-  if (obj === null) return 'null';
-  if (typeof obj === 'undefined') return undefined;
-  if (typeof obj === 'boolean') return obj ? 'true' : 'false';
-  if (typeof obj === 'number') return JSON.stringify(obj);
-  if (typeof obj === 'string') return JSON.stringify(obj);
-  if (Array.isArray(obj)) {
-    const items = obj.map(item => sortedStringify(item));
-    return '[' + items.join(',') + ']';
-  }
-  if (typeof obj === 'object') {
-    const keys = Object.keys(obj).sort();
-    const pairs = keys
-      .map(k => {
-        const v = sortedStringify(obj[k]);
-        return v !== undefined ? JSON.stringify(k) + ':' + v : undefined;
-      })
-      .filter(p => p !== undefined);
-    return '{' + pairs.join(',') + '}';
-  }
-  return String(obj);
 }
 
 /**

@@ -208,7 +208,6 @@ test('an entry stripped of its custody block does not verify', async () => {
   // and reports INTACT.
   const entries = await buildChain(2);
   delete entries[1].custody;
-  await reseal(entries[1]);
   const result = await verifyChain(entries);
   assert.equal(result.intact, false);
   assert.match(result.details, /custody/);

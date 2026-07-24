@@ -7,6 +7,136 @@
  */
 
 import { escapeCSVField, truncateHash, html, raw } from './utils.js';
+import { sortedStringify } from './canonical.js';
+import { HASHED_FIELDS, SCHEMA_VERSION, GENESIS } from './chain.js';
+
+/**
+ * A value exercising every branch the encoder can disagree on: key ordering
+ * (ASCII, non-ASCII, astral), string escaping, nesting, and null.
+ */
+const PARITY_PROBE = {
+  'z': 1,
+  'a': [1, 2, { n: null }],
+  'ü': 'quote " newline \n tab \t',
+  '\u{1f517}': { nested: 'Müller' },
+};
+
+/**
+ * Confirm the source about to be embedded reproduces this build's encoder.
+ *
+ * The embedding relies on Function.prototype.toString() returning complete,
+ * self-contained source. That holds today and survives minification, but it is
+ * an assumption about the toolchain rather than about our own code — so it is
+ * checked at generation time. A report that silently disagreed with the app
+ * about a hash would be worse than no report at all: it would tell a third
+ * party a genuine chain was broken.
+ */
+function assertEncoderParity(source) {
+  let rebuilt;
+  try {
+    // eslint-disable-next-line no-new-func
+    rebuilt = new Function(`return (${source});`)();
+  } catch (err) {
+    throw new Error(`Cannot embed the canonical encoder in the report: ${err.message}`);
+  }
+  if (rebuilt(PARITY_PROBE) !== sortedStringify(PARITY_PROBE)) {
+    throw new Error('The embedded canonical encoder does not match this build. Refusing to generate a report that would disagree with the app.');
+  }
+  if (source.includes('</script')) {
+    throw new Error('The canonical encoder source contains a script-closing sequence and cannot be embedded.');
+  }
+  return source;
+}
+
+/**
+ * The verification logic embedded in every exported report.
+ *
+ * sortedStringify is inlined from its single definition via Function.toString()
+ * rather than transcribed. The previous report carried a hand-minified copy
+ * that had already drifted — it was missing the `undefined` case — so the same
+ * entry could hash differently in the app and in the report, and the report
+ * would declare CHAIN BROKEN on a chain the app called INTACT. Consensus code
+ * with two copies eventually has two behaviours; the only durable fix is one
+ * copy.
+ *
+ * sortedStringify is deliberately self-contained (it closes over nothing), so
+ * its source text is complete and survives minification.
+ */
+function verifierSource() {
+  const encoderSource = assertEncoderParity(sortedStringify.toString());
+  return `
+const SCHEMA_VERSION = ${JSON.stringify(SCHEMA_VERSION)};
+const GENESIS = ${JSON.stringify(GENESIS)};
+const HASHED_FIELDS = ${JSON.stringify(HASHED_FIELDS)};
+const ENTRIES = JSON.parse(document.getElementById('chain-data').textContent);
+
+const sortedStringify = ${encoderSource};
+
+async function computeEntryHash(entry) {
+  const hashable = {};
+  for (const key of HASHED_FIELDS) hashable[key] = entry[key];
+  const bytes = new TextEncoder().encode(sortedStringify(hashable));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function setResult(text, className) {
+  const el = document.getElementById('result');
+  el.textContent = text;
+  el.className = className;
+}
+
+async function verify() {
+  if (!globalThis.crypto || !crypto.subtle) {
+    setResult('Cannot verify: the Web Crypto API is unavailable in this context. Open this report over https:// or as a local file in a modern browser.', 'broken');
+    return;
+  }
+
+  let prev = GENESIS;
+  const chainId = ENTRIES.length ? ENTRIES[0].chain_id : null;
+
+  for (let i = 0; i < ENTRIES.length; i++) {
+    const entry = ENTRIES[i];
+    const status = document.getElementById('status-' + i);
+    const fail = (label, reason) => {
+      status.textContent = label;
+      status.className = 'mono fail';
+      setResult('CHAIN BROKEN at entry ' + (i + 1) + ' — ' + reason, 'broken');
+    };
+
+    if (entry.schema_version !== SCHEMA_VERSION) {
+      fail('FORMAT', 'unsupported schema version'); return;
+    }
+    if (entry.seq !== i) {
+      fail('ORDER', 'entries were reordered or removed'); return;
+    }
+    if (entry.chain_id !== chainId) {
+      fail('FOREIGN', 'entry belongs to a different chain'); return;
+    }
+    if (entry.prev_hash !== prev) {
+      fail('BROKEN', 'link does not match the preceding entry'); return;
+    }
+    if (await computeEntryHash(entry) !== entry.entry_hash) {
+      fail('MODIFIED', 'entry content was modified'); return;
+    }
+
+    status.textContent = '\\u2713 OK';
+    status.className = 'mono pass';
+    prev = entry.entry_hash;
+  }
+
+  setResult(
+    'CHAIN INTACT \\u2014 ' + ENTRIES.length + ' entries verified. Head: ' + prev
+      + '. This shows the records are in order and unaltered; it cannot show whether entries were removed from the end.',
+    'intact',
+  );
+}
+
+document.getElementById('verify-btn').addEventListener('click', () => {
+  verify().catch(err => setResult('Verification failed: ' + err, 'broken'));
+});
+`;
+}
 
 export function generateCSV(entries) {
   const headers = ['id', 'timestamp_registered', 'file_name', 'file_hash', 'file_size', 'file_type', 'custodian', 'case_reference', 'notes', 'prev_hash', 'entry_hash'];
@@ -104,12 +234,7 @@ td{padding:10px 12px;border-bottom:1px solid #1e2a42}
 </div>
 </div>
 <script type="application/json" id="chain-data">${raw(embedJSON(entries))}</script>
-<script>
-const ENTRIES=JSON.parse(document.getElementById('chain-data').textContent);
-function sortedStringify(o){if(o===null)return'null';if(typeof o==='undefined')return undefined;if(typeof o==='boolean')return o?'true':'false';if(typeof o==='number')return JSON.stringify(o);if(typeof o==='string')return JSON.stringify(o);if(Array.isArray(o))return'['+o.map(sortedStringify).join(',')+']';if(typeof o==='object'){const k=Object.keys(o).sort();const p=k.map(k=>{const v=sortedStringify(o[k]);return v!==undefined?JSON.stringify(k)+':'+v:undefined}).filter(p=>p!==undefined);return'{'+p.join(',')+'}'}return String(o)}
-async function computeHash(e){const h={};for(const k of Object.keys(e))if(k!=='entry_hash')h[k]=e[k];const c=sortedStringify(h);const b=new TextEncoder().encode(c);const d=await crypto.subtle.digest('SHA-256',b);return Array.from(new Uint8Array(d),b=>b.toString(16).padStart(2,'0')).join('')}
-async function verify(){const r=document.getElementById('result');if(!globalThis.crypto||!crypto.subtle){r.textContent='Cannot verify: the Web Crypto API is unavailable in this context. Open this report over https:// or as a local file in a modern browser.';r.className='broken';return}let prev='GENESIS';let broken=false;for(let i=0;i<ENTRIES.length;i++){const e=ENTRIES[i];const s=document.getElementById('status-'+i);if(e.prev_hash!==prev){s.textContent='BROKEN';s.className='mono fail';r.textContent='CHAIN BROKEN at entry '+(i+1);r.className='broken';broken=true;break}const h=await computeHash(e);if(h!==e.entry_hash){s.textContent='MODIFIED';s.className='mono fail';r.textContent='CHAIN BROKEN at entry '+(i+1)+' (content modified)';r.className='broken';broken=true;break}s.textContent='\\u2713 OK';s.className='mono pass';prev=e.entry_hash}if(!broken){r.textContent='CHAIN INTACT \\u2014 '+ENTRIES.length+' entries verified';r.className='intact'}}
-document.getElementById('verify-btn').addEventListener('click',()=>{verify().catch(err=>{const r=document.getElementById('result');r.textContent='Verification failed: '+err;r.className='broken'})});
+<script>${raw(verifierSource())}
 </script>
 </body>
 </html>`);

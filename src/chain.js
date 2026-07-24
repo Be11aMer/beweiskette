@@ -20,7 +20,8 @@
  */
 
 import { hashString, constantTimeEqual } from './crypto.js';
-import { sortedStringify, generateId, nowISO } from './utils.js';
+import { sortedStringify } from './canonical.js';
+import { generateId, nowISO } from './utils.js';
 
 const GENESIS = 'GENESIS';
 export const SCHEMA_VERSION = 2;
@@ -34,7 +35,7 @@ export const SCHEMA_VERSION = 2;
  * becomes part of the digest, so what a given entry_hash commits to depends on
  * the shape of the object rather than on the format.
  */
-const HASHED_FIELDS = [
+export const HASHED_FIELDS = [
   'schema_version',
   'chain_id',
   'seq',
@@ -219,7 +220,16 @@ export async function verifyChain(entries) {
       return broken(entries, i, entry, 'prev_hash does not match the preceding entry');
     }
 
-    const computedHash = await computeEntryHash(entry);
+    // validateEntry has already established that every hashed field is
+    // present and well-typed, so this should not throw — but the input is
+    // untrusted, so a canonicalization failure is reported as a broken chain
+    // rather than escaping as an exception.
+    let computedHash;
+    try {
+      computedHash = await computeEntryHash(entry);
+    } catch (err) {
+      return broken(entries, i, entry, `entry cannot be canonicalized (${err.message})`);
+    }
     if (!constantTimeEqual(computedHash, entry.entry_hash)) {
       return broken(entries, i, entry, 'entry content was modified');
     }

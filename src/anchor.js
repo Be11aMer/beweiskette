@@ -23,7 +23,7 @@
  */
 
 import { hashString } from './crypto.js';
-import { sortedStringify } from './utils.js';
+import { sortedStringify } from './canonical.js';
 import { verifyChain, SCHEMA_VERSION } from './chain.js';
 
 const HEADER = 'BEWEISKETTE ANCHOR RECEIPT';

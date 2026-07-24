@@ -185,8 +185,14 @@ function readGPSCoord(view, tiffStart, gpsTags, coordTag, refTag, le) {
   let decimal = degNum / degDen + minNum / minDen / 60 + secNum / secDen / 3600;
 
   if (ref === 'S' || ref === 'W') decimal = -decimal;
+  if (!Number.isFinite(decimal) || Math.abs(decimal) > 180) return null;
 
-  return Math.round(decimal * 1000000) / 1000000;
+  // Returned as a fixed 6-decimal string, not a number. The canonical encoder
+  // rejects non-integer numbers because JavaScript and Python format floats
+  // differently — JS renders 52.0 as "52", Python as "52.0" — which would give
+  // the same entry two different hashes in the two tools. A fixed-width
+  // decimal string is unambiguous everywhere.
+  return decimal.toFixed(6);
 }
 
 function getU16(view, offset, le) {
