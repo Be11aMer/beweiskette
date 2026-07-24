@@ -5,8 +5,8 @@
 
 import { hashFile } from '../crypto.js';
 import { extractExif } from '../exif.js';
-import { createEntry, GENESIS } from '../chain.js';
-import { addEntry, getLastEntry } from '../store.js';
+import { createEntry, createChainId } from '../chain.js';
+import { addEntry, getChainState } from '../store.js';
 import { formatFileSize, truncateHash, sanitizeText, html } from '../utils.js';
 import { showToast, navigateTo } from '../main.js';
 
@@ -212,16 +212,24 @@ async function registerEvidence(container) {
       notes: notes || '',
     };
 
-    const lastEntry = await getLastEntry();
-    const prevHash = lastEntry ? lastEntry.entry_hash : GENESIS;
+    // Read the head immediately before building the entry; addEntry re-checks
+    // the link inside its own transaction and refuses if it moved.
+    const state = await getChainState();
 
-    const entry = await createEntry(evidence, metadata, custody, prevHash);
+    const entry = await createEntry({
+      evidence,
+      metadata,
+      custody,
+      prevHash: state.prevHash,
+      seq: state.nextSeq,
+      chainId: state.chainId || createChainId(),
+    });
     await addEntry(entry);
 
     showToast(`Evidence registered — ${truncateHash(entry.entry_hash)}`);
     navigateTo('chain');
   } catch (err) {
-    showToast('Failed to register evidence.', true);
+    showToast(err && err.message ? err.message : 'Failed to register evidence.', true);
     registerBtn.disabled = false;
     registerBtn.textContent = 'Register Evidence';
   }

@@ -95,7 +95,13 @@ export function truncateHash(hash) {
 }
 
 /**
- * Get current timestamp in ISO 8601 with local timezone offset.
+ * Current time as an ISO 8601 timestamp in UTC ("...Z").
+ *
+ * Always UTC, never a local offset: the value is recorded verbatim in the
+ * entry and hashed, so a fixed-width, timezone-independent form is the only
+ * one that stays comparable across machines. It is a claim about when the
+ * registering machine believed the entry was made — nothing more. See
+ * docs/THREAT_MODEL.md.
  */
 export function nowISO() {
   return new Date().toISOString();
