@@ -4,7 +4,9 @@
 
 import { getAllEntries } from '../store.js';
 import { verifyChain } from '../chain.js';
+import { buildReceipt, formatReceipt } from '../anchor.js';
 import { formatDate, truncateHash, formatFileSize, html } from '../utils.js';
+import { showToast } from '../main.js';
 
 export async function render(container) {
   const entries = await getAllEntries();
@@ -28,6 +30,16 @@ export async function render(container) {
   const statusText = verification.intact ? 'Chain Intact' : 'Chain Broken';
   const firstDate = formatDate(entries[0].timestamp_registered);
   const lastDate = formatDate(entries[entries.length - 1].timestamp_registered);
+
+  // Only an intact chain can be anchored; anchoring a broken one is meaningless.
+  let receiptText = null;
+  if (verification.intact) {
+    try {
+      receiptText = formatReceipt(await buildReceipt(entries));
+    } catch {
+      receiptText = null;
+    }
+  }
 
   const reversed = [...entries].reverse();
   const entryFragments = reversed.map((entry, i) => {
@@ -109,8 +121,32 @@ export async function render(container) {
     <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:24px">
       ${firstDate} — ${lastDate}
     </div>
+    ${receiptText ? html`
+      <div class="receipt-panel">
+        <div class="receipt-header">
+          <span class="section-title">Head Receipt</span>
+          <button class="btn btn-secondary btn-small" id="copy-receipt-btn">Copy</button>
+        </div>
+        <p class="receipt-hint">
+          Publish this somewhere you do not control the timeline of — a git commit, a dated
+          email, a public post, a timestamping authority. The chain proves the order of these
+          records; a published receipt is what proves they existed by a given moment, and is
+          the only thing that reveals entries removed from the end.
+        </p>
+        <pre class="receipt-block">${receiptText}</pre>
+      </div>
+    ` : ''}
     <div class="chain-timeline">${entryFragments}</div>
   `;
+
+  const copyReceiptBtn = container.querySelector('#copy-receipt-btn');
+  if (copyReceiptBtn) {
+    copyReceiptBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(receiptText)
+        .then(() => showToast('Receipt copied — publish it somewhere durable.'))
+        .catch(() => showToast('Could not copy. Select the text manually.', true));
+    });
+  }
 
   const COPY_ICON = html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

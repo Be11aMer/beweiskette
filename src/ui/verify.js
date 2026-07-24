@@ -7,8 +7,12 @@
  */
 
 import { verifyChain } from '../chain.js';
+import { parseReceipt, checkAnchor } from '../anchor.js';
 import { hashFile, constantTimeEqual } from '../crypto.js';
 import { formatDate, truncateHash, html, raw } from '../utils.js';
+
+/** Entries from the most recently imported chain, for the anchor check. */
+let importedEntries = null;
 
 const ICON_PASS = raw('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>');
 const ICON_FAIL = raw('<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>');
@@ -48,6 +52,27 @@ export function render(container) {
     <div class="divider" style="margin:36px 0"></div>
 
     <div class="section-header">
+      <span class="section-title">Check Against a Published Receipt</span>
+    </div>
+    <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:20px">
+      A chain that verifies only proves its records are in order and unaltered. It cannot show
+      that entries were removed from the end, because nothing in the file commits to how long
+      it should be. Paste a receipt published earlier to check the chain still reaches it.
+    </p>
+    <div class="form-group">
+      <label class="form-label" for="receipt-input">Anchor Receipt</label>
+      <textarea class="form-textarea" id="receipt-input" rows="8"
+        placeholder="Paste the BEWEISKETTE ANCHOR RECEIPT block here"
+        style="font-family:var(--font-mono);font-size:0.75rem"></textarea>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" id="check-anchor-btn">Check Anchor</button>
+    </div>
+    <div id="anchor-results"></div>
+
+    <div class="divider" style="margin:36px 0"></div>
+
+    <div class="section-header">
       <span class="section-title">Verify Single File</span>
     </div>
     <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:20px">
@@ -70,7 +95,38 @@ export function render(container) {
   `;
 
   setupChainVerify(container);
+  setupAnchorCheck(container);
   setupFileVerify(container);
+}
+
+function setupAnchorCheck(container) {
+  const resultsDiv = container.querySelector('#anchor-results');
+  const input = container.querySelector('#receipt-input');
+
+  container.querySelector('#check-anchor-btn').addEventListener('click', async () => {
+    if (!importedEntries) {
+      resultsDiv.innerHTML = statusLine(false, 'Import a chain JSON above first, then check it against the receipt.');
+      return;
+    }
+
+    let receipt;
+    try {
+      receipt = await parseReceipt(input.value);
+    } catch (err) {
+      resultsDiv.innerHTML = statusLine(false, err.message);
+      return;
+    }
+
+    try {
+      const result = await checkAnchor(importedEntries, receipt);
+      resultsDiv.innerHTML = html`
+        ${statusLine(result.matches, result.matches ? 'ANCHOR CONFIRMED' : 'ANCHOR MISMATCH')}
+        <div style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;padding-left:30px">${result.reason}</div>
+      `;
+    } catch (err) {
+      resultsDiv.innerHTML = statusLine(false, `Could not check the anchor: ${err.message}`);
+    }
+  });
 }
 
 /** Wire a drop zone + file input pair to a handler. */
@@ -100,6 +156,7 @@ function setupChainVerify(container) {
 }
 
 async function verifyChainFile(file, resultsDiv) {
+  importedEntries = null;
   try {
     const text = await file.text();
     let entries;
@@ -115,6 +172,7 @@ async function verifyChainFile(file, resultsDiv) {
       return;
     }
 
+    importedEntries = entries;
     const result = await verifyChain(entries);
 
     let summary;
@@ -124,6 +182,13 @@ async function verifyChainFile(file, resultsDiv) {
         ${entries.length > 0 ? html`
           <div style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;padding-left:30px">
             Range: ${formatDate(entries[0].timestamp_registered)} — ${formatDate(entries[entries.length - 1].timestamp_registered)}
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-muted);padding-left:30px">
+            Head: <span style="font-family:var(--font-mono)">${result.headHash}</span>
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-muted);padding-left:30px;margin-top:8px">
+            "Intact" means these ${result.entries} records are in order and unaltered. It does not
+            show whether entries were removed from the end — check a published receipt below for that.
           </div>
         ` : ''}
       `;

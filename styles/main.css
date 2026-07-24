@@ -782,3 +782,48 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Anchor receipt ─────────────────────────────────────────────── */
+
+.receipt-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  margin-bottom: 24px;
+}
+
+.receipt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.receipt-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin-bottom: 14px;
+}
+
+.receipt-block {
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+.btn-small {
+  padding: 6px 14px;
+  font-size: 0.78rem;
+}
