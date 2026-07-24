@@ -86,11 +86,30 @@ export async function render(container) {
 
   container.querySelector('#download-btn').addEventListener('click', () => downloadExport(entries));
 
+  // The chain is append-only by construction — there is no API to edit or
+  // remove a single entry — but wholesale destruction is still one click away,
+  // and it is irreversible. A single confirm() is too thin a barrier in front
+  // of an evidence log, so this asks for the word to be typed and nudges
+  // toward exporting first.
   container.querySelector('#clear-all-btn').addEventListener('click', async () => {
-    if (confirm('This will permanently delete all evidence entries from this browser. Exported files will not be affected. Continue?')) {
+    const typed = prompt(
+      `This permanently deletes all ${entries.length} entries from this browser. `
+      + 'It cannot be undone, and any chain you have not exported is lost — '
+      + 'exported files are unaffected.\n\n'
+      + 'Export first if you have not already.\n\n'
+      + 'Type DELETE to confirm:',
+    );
+    if (typed === null) return;
+    if (typed.trim() !== 'DELETE') {
+      showToast('Not deleted — confirmation did not match.', true);
+      return;
+    }
+    try {
       await clearAll();
-      showToast('All data cleared.');
+      showToast(`Deleted ${entries.length} entries.`);
       render(container);
+    } catch (err) {
+      showToast(`Could not clear the store: ${err.message}`, true);
     }
   });
 }

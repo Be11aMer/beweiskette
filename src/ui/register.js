@@ -32,7 +32,7 @@ export function render(container) {
 
     <div id="file-info-section"></div>
 
-    <div id="custody-form-section" style="display:none">
+    <div id="custody-form-section" class="hidden">
       <div class="divider"></div>
       <div class="section-header">
         <span class="section-title">Chain of Custody</span>
@@ -130,9 +130,9 @@ async function processFile(file, container) {
       }
       if (fields.length > 0) {
         exifHTML = html`
-          <div class="file-info-row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px">
-            <span class="file-info-label" style="color:var(--accent)">EXIF Metadata</span>
-            <span class="file-info-value" style="font-size:0.73rem;color:var(--text-muted)">Extracted from file</span>
+          <div class="file-info-row section-break">
+            <span class="file-info-label text-accent">EXIF Metadata</span>
+            <span class="file-info-value subtle">Extracted from file</span>
           </div>
           ${fields.map(([label, value]) => html`
             <div class="file-info-row">
@@ -170,14 +170,14 @@ async function processFile(file, container) {
       </div>
     `;
 
-    formSection.style.display = 'block';
+    formSection.classList.remove('hidden');
     registerBtn.disabled = false;
   } catch (err) {
     infoSection.innerHTML = html`
-      <div class="file-info" style="border-color:var(--danger-border)">
+      <div class="file-info danger">
         <div class="file-info-row">
-          <span class="file-info-label" style="color:var(--danger)">Error</span>
-          <span class="file-info-value" style="color:var(--danger)">Failed to process file.</span>
+          <span class="file-info-label text-danger">Error</span>
+          <span class="file-info-value text-danger">Failed to process file.</span>
         </div>
       </div>
     `;

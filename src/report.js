@@ -11,39 +11,24 @@ import { sortedStringify } from './canonical.js';
 import { HASHED_FIELDS, SCHEMA_VERSION, GENESIS } from './chain.js';
 
 /**
- * A value exercising every branch the encoder can disagree on: key ordering
- * (ASCII, non-ASCII, astral), string escaping, nesting, and null.
- */
-const PARITY_PROBE = {
-  'z': 1,
-  'a': [1, 2, { n: null }],
-  'ü': 'quote " newline \n tab \t',
-  '\u{1f517}': { nested: 'Müller' },
-};
-
-/**
- * Confirm the source about to be embedded reproduces this build's encoder.
+ * Sanity-check the encoder source about to be embedded.
  *
- * The embedding relies on Function.prototype.toString() returning complete,
- * self-contained source. That holds today and survives minification, but it is
- * an assumption about the toolchain rather than about our own code — so it is
- * checked at generation time. A report that silently disagreed with the app
- * about a hash would be worse than no report at all: it would tell a third
- * party a genuine chain was broken.
+ * Deliberately does NOT execute the source. Evaluating it would require
+ * `unsafe-eval` in the app's Content-Security-Policy, and weakening the CSP of
+ * the whole application to self-check one export path is a bad trade. The real
+ * behavioural parity check — reconstructing this source and comparing its
+ * output to the app's, digest for digest — lives in test/parity.test.js, where
+ * there is no CSP to undermine.
+ *
+ * What is left here are the two checks that can be made structurally, and that
+ * would produce a corrupt artifact rather than a caught error.
  */
-function assertEncoderParity(source) {
-  let rebuilt;
-  try {
-    // eslint-disable-next-line no-new-func
-    rebuilt = new Function(`return (${source});`)();
-  } catch (err) {
-    throw new Error(`Cannot embed the canonical encoder in the report: ${err.message}`);
-  }
-  if (rebuilt(PARITY_PROBE) !== sortedStringify(PARITY_PROBE)) {
-    throw new Error('The embedded canonical encoder does not match this build. Refusing to generate a report that would disagree with the app.');
-  }
+function checkEncoderSource(source) {
   if (source.includes('</script')) {
-    throw new Error('The canonical encoder source contains a script-closing sequence and cannot be embedded.');
+    throw new Error('The canonical encoder source contains a script-closing sequence and cannot be embedded safely.');
+  }
+  if (!/^function\b/.test(source.trim())) {
+    throw new Error('The canonical encoder source is not a complete function declaration; refusing to embed it.');
   }
   return source;
 }
@@ -63,7 +48,7 @@ function assertEncoderParity(source) {
  * its source text is complete and survives minification.
  */
 function verifierSource() {
-  const encoderSource = assertEncoderParity(sortedStringify.toString());
+  const encoderSource = checkEncoderSource(sortedStringify.toString());
   return `
 const SCHEMA_VERSION = ${JSON.stringify(SCHEMA_VERSION)};
 const GENESIS = ${JSON.stringify(GENESIS)};

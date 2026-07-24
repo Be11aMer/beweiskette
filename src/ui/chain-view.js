@@ -118,7 +118,7 @@ export async function render(container) {
       </span>
       <span class="section-title">${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}</span>
     </div>
-    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:24px">
+    <div class="chain-range">
       ${firstDate} — ${lastDate}
     </div>
     ${receiptText ? html`

@@ -1,8 +1,33 @@
 {
   "name": "beweiskette",
   "version": "1.0.0",
-  "description": "Digital evidence chain of custody — zero-runtime-dependency web app",
+  "description": "Client-side, tamper-evident chain of custody for digital evidence. Zero runtime dependencies.",
+  "keywords": [
+    "chain-of-custody",
+    "digital-forensics",
+    "hash-chain",
+    "sha-256",
+    "tamper-evident",
+    "evidence",
+    "legal-tech",
+    "client-side",
+    "web-crypto",
+    "zero-dependency"
+  ],
+  "author": "Bellamer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Be11aMer/beweiskette.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Be11aMer/beweiskette/issues"
+  },
+  "homepage": "https://github.com/Be11aMer/beweiskette#readme",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,7 +35,6 @@
     "test": "node --test \"test/**/*.test.js\"",
     "deploy": "npm run build && npx wrangler pages deploy dist"
   },
-  "license": "MIT",
   "devDependencies": {
     "vite": "^6.0.0"
   }
