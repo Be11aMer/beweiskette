@@ -1,6 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "beweiskette",
-  "pages_build_output_dir": "dist",
   "compatibility_date": "2026-07-23"
+  // Static asset hosting with SPA fallback.
+  // "single-page-application" serves index.html for any route that doesn't
+  // match a static file — no _redirects file needed, no infinite loops.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
 }
