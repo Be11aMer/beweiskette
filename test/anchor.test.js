@@ -9,8 +9,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildReceipt, formatReceipt, parseReceipt, checkAnchor } from '../src/anchor.js';
-import { createEntry, createChainId, computeEntryHash, GENESIS } from '../src/chain.js';
+import { buildReceipt, formatReceipt, parseReceipt, checkAnchor, anchorCoverage, createAnchorRecord, ANCHOR_METHOD } from '../src/anchor.js';
+import { createEntry, createChainId, computeEntryHash, verifyChain, GENESIS } from '../src/chain.js';
 
 async function buildChain(n, chainId = createChainId(), custodian = 'A. Muster') {
   const entries = [];
@@ -171,4 +171,89 @@ test('a broken or empty chain cannot be anchored', async () => {
   const entries = await buildChain(3);
   entries[1].evidence.file_name = 'tampered.jpg';
   await assert.rejects(() => buildReceipt(entries), /broken chain/);
+});
+
+// ── Export envelope and anchor records ─────────────────────────────
+
+test('the envelope carries the chain and its anchors, and reads back', async () => {
+  const { buildEnvelope, readEnvelope } = await import('../src/report.js');
+  const entries = await buildChain(3);
+  const receipt = await buildReceipt(entries);
+  const anchor = createAnchorRecord({ receipt, method: ANCHOR_METHOD.PUBLISHED });
+
+  const envelope = buildEnvelope(entries, [anchor]);
+  assert.equal(envelope.format, 'beweiskette-chain');
+
+  const read = readEnvelope(JSON.parse(JSON.stringify(envelope)));
+  assert.equal(read.legacy, false);
+  assert.deepEqual(read.chain, JSON.parse(JSON.stringify(entries)));
+  assert.equal(read.anchors.length, 1);
+});
+
+test('a bare array still imports — old exports must not stop working', async () => {
+  const { readEnvelope } = await import('../src/report.js');
+  const entries = await buildChain(2);
+  const read = readEnvelope(JSON.parse(JSON.stringify(entries)));
+  assert.equal(read.legacy, true);
+  assert.equal(read.chain.length, 2);
+  assert.deepEqual(read.anchors, []);
+});
+
+test('junk is rejected rather than read as an empty chain', async () => {
+  const { readEnvelope } = await import('../src/report.js');
+  for (const bad of [null, 42, 'chain', {}, { chain: 'nope' }]) {
+    assert.equal(readEnvelope(bad), null, `accepted ${JSON.stringify(bad)}`);
+  }
+});
+
+test('an embedded anchor detects truncation with no receipt supplied', async () => {
+  // The practical win: a recipient who has never seen a receipt still catches
+  // a chain whose tail was removed, because the anchor travelled with it.
+  const entries = await buildChain(6);
+  const anchor = createAnchorRecord({
+    receipt: await buildReceipt(entries),
+    method: ANCHOR_METHOD.TSA,
+  });
+
+  const truncated = entries.slice(0, 3);
+  assert.equal((await verifyChain(truncated)).intact, true, 'truncated chain should still verify on its own');
+
+  const receipt = await parseReceipt(anchor.receipt);
+  const result = await checkAnchor(truncated, receipt);
+  assert.equal(result.matches, false);
+  assert.equal(result.truncated, true);
+});
+
+test('anchor coverage reports the unanchored window', async () => {
+  const entries = await buildChain(5);
+  const early = createAnchorRecord({
+    receipt: await buildReceipt(entries.slice(0, 2)),
+    method: ANCHOR_METHOD.PUBLISHED,
+  });
+
+  const coverage = anchorCoverage(entries, [early]);
+  assert.equal(coverage.anchored, true);
+  assert.equal(coverage.latestSeq, 1);
+  assert.equal(coverage.unanchored, 3);
+  assert.match(coverage.summary, /3 later entries are not yet covered/);
+});
+
+test('coverage says so plainly when a chain has no anchors', async () => {
+  const coverage = anchorCoverage(await buildChain(4), []);
+  assert.equal(coverage.anchored, false);
+  assert.match(coverage.summary, /All 4 entries could be removed/);
+});
+
+test('anchors claiming a height beyond the chain are ignored for coverage', async () => {
+  // A stripped tail plus a leftover anchor must not read as fully covered.
+  const entries = await buildChain(2);
+  const coverage = anchorCoverage(entries, [{ seq: 99, method: ANCHOR_METHOD.TSA }]);
+  assert.equal(coverage.anchored, false);
+});
+
+test('tokens survive the base64 round trip byte for byte', async () => {
+  const { encodeToken, decodeToken } = await import('../src/anchor.js');
+  const bytes = crypto.getRandomValues(new Uint8Array(2617));
+  assert.deepEqual(decodeToken(encodeToken(bytes)), bytes);
+  assert.equal(decodeToken('not base64!!'), null);
 });

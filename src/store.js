@@ -10,11 +10,12 @@
  * the user as CHAIN BROKEN on a chain nobody touched.
  */
 
-import { GENESIS, SCHEMA_VERSION, checkAppend, nextConstraints } from './chain.js';
+import { GENESIS, SUPPORTED_VERSIONS, checkAppend, nextConstraints } from './chain.js';
 
 const DB_NAME = 'beweiskette';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_NAME = 'entries';
+const ANCHOR_STORE = 'anchors';
 
 let dbInstance = null;
 
@@ -50,6 +51,14 @@ export function openDB() {
       // indistinguishable from forging them.
       if (!store.indexNames.contains('seq')) {
         store.createIndex('seq', 'seq', { unique: true });
+      }
+
+      // Anchors live outside the chain rather than as entries. An anchor is
+      // evidence *about* the chain, and a timestamp token is self-
+      // authenticating on its own, so folding them into the hashed payload
+      // would force a format change for no gain.
+      if (!db.objectStoreNames.contains(ANCHOR_STORE)) {
+        db.createObjectStore(ANCHOR_STORE, { keyPath: 'seq' });
       }
     };
 
@@ -152,8 +161,10 @@ export async function getChainState() {
 }
 
 /**
- * Entries written under chain format v1, which this build can no longer
- * verify. Surfaced so they can be exported rather than quietly lost.
+ * Entries in a format this build can no longer verify.
+ *
+ * Keyed off SUPPORTED_VERSIONS rather than the current version: bumping the
+ * format must not reclassify still-supported entries as unreadable.
  */
 export function getLegacyEntries() {
   return openDB().then((db) => new Promise((resolve, reject) => {
@@ -161,7 +172,7 @@ export function getLegacyEntries() {
     const request = tx.objectStore(STORE_NAME).getAll();
     request.onsuccess = () => {
       const all = request.result || [];
-      resolve(all.filter((e) => e && e.schema_version !== SCHEMA_VERSION));
+      resolve(all.filter((e) => !e || !SUPPORTED_VERSIONS.includes(e.schema_version)));
     };
     request.onerror = () => reject(new Error('Failed to read legacy entries: ' + request.error));
   }));
@@ -209,4 +220,45 @@ export async function requestPersistence() {
   } catch {
     return { persisted: false, supported: true };
   }
+}
+
+// ── Anchors ────────────────────────────────────────────────────────
+
+/** Record an anchor for the chain head at `anchor.seq`. */
+export function putAnchor(anchor) {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ANCHOR_STORE, 'readwrite');
+    // put, not add: re-anchoring the same height with a stronger method (a
+    // published receipt later backed by a signed token) should replace it.
+    tx.objectStore(ANCHOR_STORE).put(anchor);
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error || new Error('Anchor write aborted.'));
+    tx.onerror = () => reject(tx.error || new Error('Failed to store the anchor.'));
+  }));
+}
+
+/** All anchors, ordered by the height they cover. */
+export function getAnchors() {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ANCHOR_STORE, 'readonly');
+    const request = tx.objectStore(ANCHOR_STORE).getAll();
+    request.onsuccess = () => resolve((request.result || []).sort((a, b) => a.seq - b.seq));
+    request.onerror = () => reject(new Error('Failed to read anchors: ' + request.error));
+  }));
+}
+
+/** The most recent anchor, or null. */
+export async function getLatestAnchor() {
+  const anchors = await getAnchors();
+  return anchors.length ? anchors[anchors.length - 1] : null;
+}
+
+/** Remove every anchor. Used alongside clearAll. */
+export function clearAnchors() {
+  return openDB().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(ANCHOR_STORE, 'readwrite');
+    tx.objectStore(ANCHOR_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Failed to clear anchors.'));
+  }));
 }

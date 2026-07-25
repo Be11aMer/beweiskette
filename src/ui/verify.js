@@ -7,7 +7,8 @@
  */
 
 import { verifyChain } from '../chain.js';
-import { parseReceipt, checkAnchor } from '../anchor.js';
+import { parseReceipt, checkAnchor, anchorCoverage } from '../anchor.js';
+import { readEnvelope } from '../report.js';
 import { hashFile, constantTimeEqual } from '../crypto.js';
 import { formatDate, truncateHash, html, raw } from '../utils.js';
 
@@ -128,6 +129,51 @@ function setupAnchorCheck(container) {
   });
 }
 
+/**
+ * Check anchors carried inside an imported export.
+ *
+ * Reported even when there are none: "this chain carries no anchors" is
+ * information a reader needs, because it is the state in which trailing
+ * entries can be removed with nothing to contradict it.
+ */
+async function checkEmbeddedAnchors(entries, anchors, chainResult) {
+  if (!chainResult.intact) return '';
+
+  const coverage = anchorCoverage(entries, anchors);
+  if (!coverage.anchored) {
+    return html`
+      <div class="result-note spaced">
+        No anchors are included with this chain, so there is nothing to show that entries
+        were not removed from the end.
+      </div>
+    `;
+  }
+
+  const checks = [];
+  for (const anchor of anchors) {
+    let receipt;
+    try {
+      receipt = await parseReceipt(anchor.receipt);
+    } catch (err) {
+      checks.push(statusLine(false, `Anchor at entry ${anchor.seq + 1}: ${err.message}`, 'mt-12'));
+      continue;
+    }
+    const result = await checkAnchor(entries, receipt);
+    checks.push(html`
+      ${statusLine(result.matches, `Anchor at entry ${receipt.seq + 1}: ${result.matches ? 'confirmed' : 'MISMATCH'}`, 'mt-12')}
+      <div class="result-note">${result.reason}</div>
+    `);
+  }
+
+  return html`
+    <div class="mt-16">
+      <div class="section-title mb-8">Anchors included with this chain</div>
+      <div class="result-note">${coverage.summary}</div>
+      ${checks}
+    </div>
+  `;
+}
+
 /** Wire a drop zone + file input pair to a handler. */
 function setupDropZone(dropZone, fileInput, onFile) {
   dropZone.addEventListener('dragover', (e) => {
@@ -158,21 +204,28 @@ async function verifyChainFile(file, resultsDiv) {
   importedEntries = null;
   try {
     const text = await file.text();
-    let entries;
+    let parsed;
     try {
-      entries = JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
       resultsDiv.innerHTML = statusLine(false, 'Invalid JSON file.');
       return;
     }
 
-    if (!Array.isArray(entries)) {
-      resultsDiv.innerHTML = statusLine(false, 'Expected a JSON array of entries.');
+    const envelope = readEnvelope(parsed);
+    if (!envelope) {
+      resultsDiv.innerHTML = statusLine(false, 'Expected a Beweiskette export or a JSON array of entries.');
       return;
     }
 
+    const entries = envelope.chain;
     importedEntries = entries;
     const result = await verifyChain(entries);
+
+    // Anchors travelling inside the export are checked without being asked
+    // for. This is what lets a recipient detect a truncated tail when they
+    // have never been sent a receipt.
+    const embeddedAnchors = await checkEmbeddedAnchors(entries, envelope.anchors, result);
 
     let summary;
     if (result.intact) {
