@@ -2,9 +2,11 @@
  * Chain View — timeline of all evidence entries with chain integrity status.
  */
 
-import { getAllEntries } from '../store.js';
+import { getAllEntries, getAnchors, putAnchor } from '../store.js';
 import { verifyChain } from '../chain.js';
-import { buildReceipt, formatReceipt } from '../anchor.js';
+import { buildReceipt, formatReceipt, createAnchorRecord, anchorCoverage, encodeToken, ANCHOR_METHOD } from '../anchor.js';
+import { requestTimestamp, verifyToken, VERDICT } from '../rfc3161.js';
+import { getTsaSettings } from '../settings.js';
 import { formatDate, truncateHash, formatFileSize, html } from '../utils.js';
 import { showToast } from '../main.js';
 
@@ -32,14 +34,19 @@ export async function render(container) {
   const lastDate = formatDate(entries[entries.length - 1].timestamp_registered);
 
   // Only an intact chain can be anchored; anchoring a broken one is meaningless.
+  let receipt = null;
   let receiptText = null;
   if (verification.intact) {
     try {
-      receiptText = formatReceipt(await buildReceipt(entries));
+      receipt = await buildReceipt(entries);
+      receiptText = formatReceipt(receipt);
     } catch {
-      receiptText = null;
+      receipt = null;
     }
   }
+
+  const anchors = await getAnchors();
+  const coverage = anchorCoverage(entries, anchors);
 
   const reversed = [...entries].reverse();
   const entryFragments = reversed.map((entry, i) => {
@@ -134,6 +141,11 @@ export async function render(container) {
           the only thing that reveals entries removed from the end.
         </p>
         <pre class="receipt-block">${receiptText}</pre>
+        <div class="receipt-coverage">${coverage.summary}</div>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-small" id="timestamp-btn">Timestamp with an authority…</button>
+        </div>
+        <div id="timestamp-result"></div>
       </div>
     ` : ''}
     <div class="chain-timeline">${entryFragments}</div>
@@ -146,6 +158,11 @@ export async function render(container) {
         .then(() => showToast('Receipt copied — publish it somewhere durable.'))
         .catch(() => showToast('Could not copy. Select the text manually.', true));
     });
+  }
+
+  const timestampBtn = container.querySelector('#timestamp-btn');
+  if (timestampBtn) {
+    timestampBtn.addEventListener('click', () => requestAndStoreTimestamp(receipt, container));
   }
 
   const COPY_ICON = html`
@@ -169,4 +186,92 @@ export async function render(container) {
       });
     });
   });
+}
+
+/**
+ * Ask a timestamp authority to sign the current head.
+ *
+ * The only outbound request the application makes. What will be sent is stated
+ * before it is sent, because "client-side only" is the property people choose
+ * this tool for — quietly making a network call would break the promise even
+ * though the payload is harmless.
+ */
+async function requestAndStoreTimestamp(receipt, container) {
+  const resultDiv = container.querySelector('#timestamp-result');
+  const settings = getTsaSettings();
+
+  if (!settings.url) {
+    resultDiv.innerHTML = html`
+      <div class="result-note spaced">
+        No timestamp authority is configured. Add one under Export → Settings, along with its
+        certificate, so its signature can actually be checked.
+      </div>
+    `;
+    return;
+  }
+
+  const consented = confirm(
+    'Send a timestamp request?\n\n'
+    + `To: ${settings.url}\n`
+    + `Sends: the 32-byte SHA-256 of your chain head (${receipt.head_hash.slice(0, 16)}…)\n\n`
+    + 'No file contents, file names, custody details or metadata are transmitted. '
+    + 'The authority learns only that something was timestamped.\n\n'
+    + 'This is the only network request this application makes.',
+  );
+  if (!consented) return;
+
+  resultDiv.innerHTML = html`<div class="result-note spaced">Requesting a timestamp…</div>`;
+
+  try {
+    const digest = hexToBytes(receipt.head_hash);
+    const { token, nonce } = await requestTimestamp(settings.url, digest);
+
+    const result = await verifyToken(token, {
+      expectedDigest: digest,
+      pinnedSpki: settings.pins,
+      expectedNonce: nonce,
+    });
+
+    if (result.verdict === VERDICT.INVALID) {
+      resultDiv.innerHTML = html`
+        <div class="verify-entry fail mt-12">Timestamp rejected</div>
+        <div class="result-note">${result.reason}</div>
+      `;
+      return;
+    }
+
+    await putAnchor(createAnchorRecord({
+      receipt,
+      method: ANCHOR_METHOD.TSA,
+      token: encodeToken(token),
+      genTime: result.genTime,
+      status: result.verdict,
+    }));
+
+    const verified = result.verdict === VERDICT.VERIFIED;
+    resultDiv.innerHTML = html`
+      <div class="verify-entry ${verified ? 'pass' : 'fail'} mt-12">
+        ${verified ? 'Timestamp verified and stored' : 'Timestamp stored, but NOT verified'}
+      </div>
+      <div class="result-note">${result.reason}</div>
+      ${verified ? '' : html`
+        <div class="result-note">
+          Signer key: <span class="mono">${result.signerSpkiSha256 || 'unknown'}</span>.
+          Pin it under Export → Settings only after confirming it belongs to the authority
+          you intended, from a source other than the response itself.
+        </div>
+      `}
+    `;
+  } catch (err) {
+    resultDiv.innerHTML = html`
+      <div class="verify-entry fail mt-12">Could not obtain a timestamp</div>
+      <div class="result-note">${err.message}</div>
+    `;
+  }
+}
+
+function hexToBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return out;
 }

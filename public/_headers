@@ -1,5 +1,16 @@
+# connect-src is the one directive that is not 'none'.
+#
+# The app makes no network request on its own. It makes exactly one when the
+# user explicitly asks for a trusted timestamp, carrying a 32-byte digest and
+# nothing else. Timestamp authorities are user-configured, so this cannot be a
+# fixed allowlist without deciding for the user which authority to trust.
+#
+# https: (no wildcard host, no http:, no data:, no blob:) keeps the request on
+# an authenticated channel while leaving the choice of authority to the user.
+# If you deploy this for an organisation with one known authority, replace it
+# with that origin — a narrower policy is strictly better where it is possible.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; manifest-src 'self'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src https: ; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; manifest-src 'self'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()

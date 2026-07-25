@@ -12,10 +12,14 @@ Beweiskette produces a **tamper-evident sequence of records**. Given a chain
 you already hold, it detects whether any record was altered, reordered, or
 removed from the middle.
 
-It does **not** prove when anything happened, it does **not** prove a chain is
-complete, and it does **not** prove that the recorded facts are true. With a
-published anchor receipt it additionally proves the chain existed in a
-specific state no later than a specific moment.
+On its own it does **not** prove when anything happened, does **not** prove a
+chain is complete, and does **not** prove that the recorded facts are true.
+
+With an anchor — a published receipt, or an RFC 3161 token signed by a
+timestamp authority — it additionally proves the chain existed in a specific
+state no later than a specific moment. With a beacon pulse recorded in an
+entry, it proves that entry was made no earlier than a specific moment. Between
+the two, an entry is bracketed rather than merely bounded.
 
 ## The assets
 
@@ -33,7 +37,7 @@ specific state no later than a specific moment.
 | **A. Later editor** | Can read and write the exported chain file, or the browser's IndexedDB, *after* records were made. Wants to change or remove a record. | **Yes**, for modification and mid-chain removal. **Only with an anchor** for tail truncation. |
 | **B. Malicious counterparty** | Sends you a chain file to verify. Wants to make a forged chain look genuine, or to attack your machine through the verifier. | **Partly.** Injection is blocked. A wholly fabricated chain is indistinguishable from a genuine one without an anchor you trust. |
 | **C. Dishonest author** | Controls the machine and the clock at the time of registration. Wants to produce a chain that looks like it was made earlier, or that records false facts. | **No**, unless anchored. This is the fundamental limit. |
-| **D. Network attacker** | Sits between you and the app's origin. | **Out of scope for the chain.** Serve over HTTPS. The app makes no network requests after load. |
+| **D. Network attacker** | Sits between you and the app's origin, or between you and a timestamp authority. | **Partly.** Serve over HTTPS. Timestamp requests go over https only and carry a digest, and the returned token is verified against a pinned key — so a network attacker cannot substitute a token that verifies. |
 | **E. Local malware** | Runs code on your machine while you use the app. | **No.** It can rewrite the chain and recompute valid hashes using the page's own code. |
 
 ## What is guaranteed
@@ -55,8 +59,14 @@ chains cannot be spliced into one file that verifies.
 to the encoding is detectable rather than silently invalidating old chains.
 
 **Locality.** Files are read in the browser and hashed with the Web Crypto
-API. Nothing is uploaded. There is no server, no analytics, no telemetry, and
-no network request after the page loads.
+API. File contents are never uploaded. There is no server, no analytics and no
+telemetry, and the app makes no network request on its own.
+
+The single exception is deliberate and user-initiated: requesting a trusted
+timestamp sends the 32-byte SHA-256 of your chain head, and nothing else, to
+the authority you configured. It states what it will send before sending it.
+A digest reveals nothing about the file it came from, so the authority learns
+only that something was timestamped.
 
 **Rendering safety.** All values from an imported chain are HTML-escaped by
 default via an auto-escaping template. This matters because verifying a
@@ -73,7 +83,17 @@ still verifies.
 makes the records controls that clock. A chain dated last year is
 indistinguishable from one built this morning on a back-dated laptop.
 
-**Mitigation:** publish an anchor receipt. See [ANCHORING.md](ANCHORING.md).
+**Mitigation:** obtain an RFC 3161 timestamp, or publish an anchor receipt. A
+timestamp token is signed by the authority, so it is checkable by someone who
+does not trust you — which is the whole point, and why fetching the time from
+an unsigned API would add nothing. A beacon pulse in a v3 entry's `time_bound`
+supplies the other side of the bound. See [ANCHORING.md](ANCHORING.md).
+
+Note the trust model: the app verifies tokens against **pinned** signer keys
+rather than building an X.509 path to a root store. That is a narrower claim
+than a browser's TLS verification, and it is deliberate — a partial path
+implementation that reports "valid" would be worse than none. Confirm
+independently with `openssl ts -verify`.
 
 ### Completeness
 
@@ -83,8 +103,16 @@ commits to how long it was supposed to be. For a custody log this is the
 sharpest limitation: the easiest way to make an inconvenient record disappear
 is to stop the story early.
 
-**Mitigation:** publish an anchor receipt, and check against it. This is the
-one gap anchoring exists to close.
+**Mitigation:** anchor, and check against it. Anchors now travel inside the
+export, so a recipient detects a truncated tail without having been sent a
+receipt beforehand — previously the only way to catch it.
+
+**The limit, stated plainly:** an attacker who truncates can strip the embedded
+anchors too. What this buys is that stripping is *conspicuous* — a chain with
+no anchors, or anchors stopping well short of the head, is visibly wrong, and
+the app reports that state rather than staying silent. The only hard guarantee
+remains a verifier holding an independently published anchor. Defence in depth,
+not a proof.
 
 ### Authenticity of the chain as a whole
 

@@ -139,8 +139,7 @@ function setupAnchorCheck(container) {
 async function checkEmbeddedAnchors(entries, anchors, chainResult) {
   if (!chainResult.intact) return '';
 
-  const coverage = anchorCoverage(entries, anchors);
-  if (!coverage.anchored) {
+  if (!anchors || anchors.length === 0) {
     return html`
       <div class="result-note spaced">
         No anchors are included with this chain, so there is nothing to show that entries
@@ -149,27 +148,41 @@ async function checkEmbeddedAnchors(entries, anchors, chainResult) {
     `;
   }
 
+  // Every anchor is checked, including any whose height exceeds this chain.
+  // Those are not "irrelevant" — an anchor committing to entry 40 against a
+  // chain that stops at 12 is precisely the evidence of a removed tail, and
+  // skipping it would discard the one signal this feature exists to surface.
+  const coverage = anchorCoverage(entries, anchors);
   const checks = [];
   for (const anchor of anchors) {
     let receipt;
     try {
       receipt = await parseReceipt(anchor.receipt);
     } catch (err) {
-      checks.push(statusLine(false, `Anchor at entry ${anchor.seq + 1}: ${err.message}`, 'mt-12'));
+      checks.push({
+        truncated: false,
+        fragment: statusLine(false, `Anchor at entry ${anchor.seq + 1}: ${err.message}`, 'mt-12'),
+      });
       continue;
     }
     const result = await checkAnchor(entries, receipt);
-    checks.push(html`
-      ${statusLine(result.matches, `Anchor at entry ${receipt.seq + 1}: ${result.matches ? 'confirmed' : 'MISMATCH'}`, 'mt-12')}
-      <div class="result-note">${result.reason}</div>
-    `);
+    checks.push({
+      truncated: Boolean(result.truncated),
+      fragment: html`
+        ${statusLine(result.matches, `Anchor at entry ${receipt.seq + 1}: ${result.matches ? 'confirmed' : 'ENTRIES MISSING'}`, 'mt-12')}
+        <div class="result-note">${result.reason}</div>
+      `,
+    });
   }
 
+  const truncated = checks.some((c) => c.truncated);
   return html`
     <div class="mt-16">
       <div class="section-title mb-8">Anchors included with this chain</div>
-      <div class="result-note">${coverage.summary}</div>
-      ${checks}
+      <div class="result-note">${truncated
+        ? 'This chain no longer reaches a height it was anchored at — entries have been removed from the end.'
+        : coverage.summary}</div>
+      ${checks.map((c) => c.fragment)}
     </div>
   `;
 }
@@ -269,6 +282,7 @@ async function verifyChainFile(file, resultsDiv) {
     resultsDiv.innerHTML = html`
       <div class="verify-results">
         ${summary}
+        ${embeddedAnchors}
         <div class="mt-16">
           <div class="section-title mb-8">Entry-by-entry verification</div>
           ${rows}

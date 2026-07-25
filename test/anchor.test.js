@@ -257,3 +257,21 @@ test('tokens survive the base64 round trip byte for byte', async () => {
   assert.deepEqual(decodeToken(encodeToken(bytes)), bytes);
   assert.equal(decodeToken('not base64!!'), null);
 });
+
+test('an anchor beyond the chain height is the truncation evidence, not noise', async () => {
+  // Regression. anchorCoverage filters anchors above the chain height, which
+  // is right for measuring coverage and wrong for detection: an anchor
+  // committing to entry 3 against a chain ending at entry 1 is exactly the
+  // signal that entries were removed. Filtering it discarded the one piece of
+  // evidence the feature exists to surface, and the chain read as simply
+  // "unanchored" instead of "truncated".
+  const entries = await buildChain(3);
+  const receipt = await buildReceipt(entries);
+  const truncated = entries.slice(0, 1);
+
+  assert.equal(anchorCoverage(truncated, [{ seq: receipt.seq }]).anchored, false);
+
+  const result = await checkAnchor(truncated, receipt);
+  assert.equal(result.truncated, true);
+  assert.match(result.reason, /commits to entry 3, but this chain ends at entry 1/);
+});

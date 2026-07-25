@@ -24,6 +24,83 @@ supposed to be. For a custody log this is the failure that matters most:
 the easiest way to make an inconvenient record disappear is to stop the story
 early.
 
+## Why not just fetch the time from the internet?
+
+Because the adversary is the person running the app. Any time value it fetches,
+that person can forge — patch the build, proxy their own machine, or skip the
+app entirely, since the format is published. The verifier is left unable to
+distinguish "the app fetched this from a time server" from "the producer typed
+it in". NTP does not help either: it corrects *your* clock, it does not produce
+a portable statement anyone else can check.
+
+What works is a value **signed by the time source**:
+
+| Mechanism | Third-party verifiable? |
+|---|---|
+| `Date.now()` | No — the producer controls it |
+| Unsigned time API | No — the producer controls the response |
+| NTP / NTS | No — authenticates a channel, not a portable statement |
+| **RFC 3161 token** | **Yes** — signed by the authority's certificate |
+| **Beacon pulse** | **Yes** — signed, and unpredictable in advance |
+
+So the problem is not fetching the time. It is obtaining and checking a
+signature.
+
+## Two-sided bounds
+
+An anchor establishes **no later than**. A randomness beacon pulse establishes
+**no earlier than**: pulse values cannot be predicted, so a record containing
+pulse N cannot predate N's publication. Recorded in a v3 entry's `time_bound`,
+inside the digest — a bound attached afterwards could be chosen once the
+desired answer was known.
+
+Confirm a beacon pulse by looking its index up in NIST's public archive and
+comparing the value. That check needs neither this app nor any trust in it,
+which is the point.
+
+## Trusted timestamps in the app
+
+The **Chain** tab has *Timestamp with an authority…*. Before anything is sent
+it states exactly what will be transmitted: the 32-byte SHA-256 of your chain
+head. No file contents, names, custody fields or metadata. The authority
+learns only that something was timestamped.
+
+**No authority is pinned by default, deliberately.** A shipped pin would assert
+that some key belongs to some authority on your behalf — an assertion this
+project cannot make for you, and one you could not check without doing the same
+work yourself. So you supply the certificate, the app shows you the computed
+pin, and you decide. Until you do, tokens are recorded as **UNVERIFIED** rather
+than the app silently trusting whatever answered.
+
+Verification results are three-valued and never collapse to two:
+
+| Verdict | Meaning |
+|---|---|
+| `VERIFIED` | Bound to your head hash and signed by a key you pinned |
+| `UNVERIFIED` | Could not be checked — unpinned signer, unsupported algorithm. **Not** a statement that it is good |
+| `INVALID` | A check actively failed. Treat as tampered |
+
+### Checking a token independently
+
+The app pins signer keys rather than building an X.509 path to a root store.
+Path building — name constraints, policy mapping, revocation — is a much larger
+problem, and a partial implementation that answers "valid" is worse than none.
+So the app's answer is deliberately narrow, and you should be able to confirm
+it without us:
+
+```bash
+# Extract the token from an exported chain's anchors[].token (base64), then:
+base64 -d anchor.b64 > anchor.tsr
+printf '%s' "<HEAD_HASH>" | xxd -r -p > head.bin
+openssl ts -verify -in anchor.tsr -data head.bin -CAfile tsa-ca.pem
+```
+
+Note what a CMS signature does and does not cover: the TSTInfo — the message
+imprint, the time, the serial — and the signed attributes are protected. The
+response wrapper, `SignedData.version` and `digestAlgorithms` are not. Editing
+those changes nothing about what was attested, so a token with an edited
+wrapper can still legitimately verify.
+
 ## What an anchor is
 
 A **head receipt** is a short text block naming the chain, its height, and its
@@ -31,7 +108,7 @@ head hash:
 
 ```
 BEWEISKETTE ANCHOR RECEIPT
-schema:  2
+schema:  3
 chain:   3f2a1b8c-4d5e-4f60-8a1b-2c3d4e5f6071
 seq:     41
 entries: 42
