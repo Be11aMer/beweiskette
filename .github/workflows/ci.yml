@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the floor declared in package.json engines; 22 is current.
+        node: [18, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # The suite uses Node's built-in runner, so there is nothing to install
+      # beyond the build tooling.
+      - run: npm test
+
+      - run: npm run build
+
+  no-runtime-dependencies:
+    # The project's central constraint. A runtime dependency would need to be
+    # a deliberate decision, not something that arrives with a pull request.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Assert package.json declares no runtime dependencies
+        run: |
+          count=$(node -p "Object.keys(require('./package.json').dependencies || {}).length")
+          if [ "$count" != "0" ]; then
+            echo "::error::package.json declares $count runtime dependencies; this project must have none."
+            node -p "JSON.stringify(require('./package.json').dependencies, null, 2)"
+            exit 1
+          fi
+          echo "No runtime dependencies."
+
+  no-inline-handlers-or-styles:
+    # The CSP in public/_headers forbids inline styles, inline event handlers
+    # and eval. Those break at runtime rather than at build time, so they are
+    # checked here instead of being discovered in production.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject inline styles in application source
+        run: |
+          if grep -rn 'style="' src/ index.html --include='*.js' --include='*.html' \
+             | grep -v '^src/report.js:'; then
+            echo "::error::Inline style attributes require 'unsafe-inline' in style-src. Use a class."
+            exit 1
+          fi
+      - name: Reject inline event handlers in application source
+        run: |
+          if grep -rnE '\son[a-z]+=' src/ index.html --include='*.js' --include='*.html' \
+             | grep -v '^src/report.js:'; then
+            echo "::error::Inline event handlers are blocked by script-src. Use addEventListener."
+            exit 1
+          fi
+      - name: Reject eval and new Function in application source
+        run: |
+          if grep -rnE '\beval\(|new Function\(' src/ --include='*.js'; then
+            echo "::error::eval/new Function require 'unsafe-eval' in script-src."
+            exit 1
+          fi
+      - name: Reject untagged template literals assigned to innerHTML
+        run: |
+          if grep -rn 'innerHTML = `' src/ --include='*.js'; then
+            echo "::error::Assign html\`...\` (the auto-escaping tag), never a bare template literal."
+            exit 1
+          fi

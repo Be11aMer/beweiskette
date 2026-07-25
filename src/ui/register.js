@@ -3,11 +3,11 @@
  * Drop zone for files, hash computation, EXIF extraction, custody form.
  */
 
-import { hashFile } from '../crypto.js';
+import { hashFileWithHead } from '../crypto.js';
 import { extractExif } from '../exif.js';
-import { createEntry, GENESIS } from '../chain.js';
-import { addEntry, getLastEntry } from '../store.js';
-import { formatFileSize, truncateHash, sanitizeText } from '../utils.js';
+import { createEntry, createChainId } from '../chain.js';
+import { addEntry, getChainState } from '../store.js';
+import { formatFileSize, truncateHash, sanitizeText, html } from '../utils.js';
 import { showToast, navigateTo } from '../main.js';
 
 let currentFile = null;
@@ -19,7 +19,7 @@ export function render(container) {
   currentFileHash = null;
   currentExif = null;
 
-  container.innerHTML = `
+  container.innerHTML = html`
     <div class="drop-zone" id="drop-zone">
       <svg class="drop-zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -32,7 +32,7 @@ export function render(container) {
 
     <div id="file-info-section"></div>
 
-    <div id="custody-form-section" style="display:none">
+    <div id="custody-form-section" class="hidden">
       <div class="divider"></div>
       <div class="section-header">
         <span class="section-title">Chain of Custody</span>
@@ -101,20 +101,26 @@ async function processFile(file, container) {
   const formSection = container.querySelector('#custody-form-section');
   const registerBtn = container.querySelector('#register-btn');
 
-  infoSection.innerHTML = `
+  infoSection.innerHTML = html`
     <div class="file-info">
       <div class="file-info-row">
         <span class="file-info-label">Computing hash</span>
-        <span class="file-info-value">...</span>
+        <span class="file-info-value" id="hash-progress">…</span>
       </div>
     </div>
   `;
+  const progressEl = infoSection.querySelector('#hash-progress');
 
   try {
-    currentFileHash = await hashFile(file);
-
-    const buffer = await file.arrayBuffer();
-    currentExif = extractExif(buffer);
+    // One read: the digest and the bytes EXIF needs come from the same pass,
+    // so the recorded hash and metadata cannot describe different bytes.
+    const { hash, head } = await hashFileWithHead(file, {
+      onProgress: (fraction) => {
+        if (progressEl) progressEl.textContent = `${Math.round(fraction * 100)}%`;
+      },
+    });
+    currentFileHash = hash;
+    currentExif = extractExif(head);
 
     let exifHTML = '';
     if (currentExif) {
@@ -129,26 +135,26 @@ async function processFile(file, container) {
         fields.push(['GPS', `${currentExif.gps_lat}, ${currentExif.gps_lng}`]);
       }
       if (fields.length > 0) {
-        exifHTML = `
-          <div class="file-info-row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px">
-            <span class="file-info-label" style="color:var(--accent)">EXIF Metadata</span>
-            <span class="file-info-value" style="font-size:0.73rem;color:var(--text-muted)">Extracted from file</span>
+        exifHTML = html`
+          <div class="file-info-row section-break">
+            <span class="file-info-label text-accent">EXIF Metadata</span>
+            <span class="file-info-value subtle">Extracted from file</span>
           </div>
-          ${fields.map(([label, value]) => `
+          ${fields.map(([label, value]) => html`
             <div class="file-info-row">
               <span class="file-info-label">${label}</span>
-              <span class="file-info-value">${sanitizeText(String(value))}</span>
+              <span class="file-info-value">${String(value)}</span>
             </div>
-          `).join('')}
+          `)}
         `;
       }
     }
 
-    infoSection.innerHTML = `
+    infoSection.innerHTML = html`
       <div class="file-info">
         <div class="file-info-row">
           <span class="file-info-label">File Name</span>
-          <span class="file-info-value">${sanitizeText(file.name)}</span>
+          <span class="file-info-value">${file.name}</span>
         </div>
         <div class="file-info-row">
           <span class="file-info-label">Size</span>
@@ -156,7 +162,7 @@ async function processFile(file, container) {
         </div>
         <div class="file-info-row">
           <span class="file-info-label">Type</span>
-          <span class="file-info-value">${sanitizeText(file.type || 'unknown')}</span>
+          <span class="file-info-value">${file.type || 'unknown'}</span>
         </div>
         <div class="file-info-row">
           <span class="file-info-label">Last Modified</span>
@@ -170,14 +176,14 @@ async function processFile(file, container) {
       </div>
     `;
 
-    formSection.style.display = 'block';
+    formSection.classList.remove('hidden');
     registerBtn.disabled = false;
   } catch (err) {
-    infoSection.innerHTML = `
-      <div class="file-info" style="border-color:var(--danger-border)">
+    infoSection.innerHTML = html`
+      <div class="file-info danger">
         <div class="file-info-row">
-          <span class="file-info-label" style="color:var(--danger)">Error</span>
-          <span class="file-info-value" style="color:var(--danger)">Failed to process file.</span>
+          <span class="file-info-label text-danger">Error</span>
+          <span class="file-info-value text-danger">Failed to process file.</span>
         </div>
       </div>
     `;
@@ -212,16 +218,24 @@ async function registerEvidence(container) {
       notes: notes || '',
     };
 
-    const lastEntry = await getLastEntry();
-    const prevHash = lastEntry ? lastEntry.entry_hash : GENESIS;
+    // Read the head immediately before building the entry; addEntry re-checks
+    // the link inside its own transaction and refuses if it moved.
+    const state = await getChainState();
 
-    const entry = await createEntry(evidence, metadata, custody, prevHash);
+    const entry = await createEntry({
+      evidence,
+      metadata,
+      custody,
+      prevHash: state.prevHash,
+      seq: state.nextSeq,
+      chainId: state.chainId || createChainId(),
+    });
     await addEntry(entry);
 
     showToast(`Evidence registered — ${truncateHash(entry.entry_hash)}`);
     navigateTo('chain');
   } catch (err) {
-    showToast('Failed to register evidence.', true);
+    showToast(err && err.message ? err.message : 'Failed to register evidence.', true);
     registerBtn.disabled = false;
     registerBtn.textContent = 'Register Evidence';
   }

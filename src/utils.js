@@ -1,6 +1,10 @@
 /**
  * Utility functions for Beweiskette.
- * Date formatting, hex conversion, UUID generation, deterministic serialization.
+ * Date formatting, hex conversion, UUID generation, HTML escaping.
+ *
+ * The canonical serializer that feeds the hash lives in canonical.js, kept
+ * apart because it is consensus-critical and embedded verbatim in the
+ * exported report.
  */
 
 /**
@@ -26,33 +30,6 @@ export function generateId() {
  */
 export function bufferToHex(buffer) {
   return Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Deterministic JSON serialization with recursively sorted keys and no whitespace.
- * Mirrors Python's json.dumps(obj, sort_keys=True, separators=(',', ':'))
- */
-export function sortedStringify(obj) {
-  if (obj === null) return 'null';
-  if (typeof obj === 'undefined') return undefined;
-  if (typeof obj === 'boolean') return obj ? 'true' : 'false';
-  if (typeof obj === 'number') return JSON.stringify(obj);
-  if (typeof obj === 'string') return JSON.stringify(obj);
-  if (Array.isArray(obj)) {
-    const items = obj.map(item => sortedStringify(item));
-    return '[' + items.join(',') + ']';
-  }
-  if (typeof obj === 'object') {
-    const keys = Object.keys(obj).sort();
-    const pairs = keys
-      .map(k => {
-        const v = sortedStringify(obj[k]);
-        return v !== undefined ? JSON.stringify(k) + ':' + v : undefined;
-      })
-      .filter(p => p !== undefined);
-    return '{' + pairs.join(',') + '}';
-  }
-  return String(obj);
 }
 
 /**
@@ -95,7 +72,13 @@ export function truncateHash(hash) {
 }
 
 /**
- * Get current timestamp in ISO 8601 with local timezone offset.
+ * Current time as an ISO 8601 timestamp in UTC ("...Z").
+ *
+ * Always UTC, never a local offset: the value is recorded verbatim in the
+ * entry and hashed, so a fixed-width, timezone-independent form is the only
+ * one that stays comparable across machines. It is a claim about when the
+ * registering machine believed the entry was made — nothing more. See
+ * docs/THREAT_MODEL.md.
  */
 export function nowISO() {
   return new Date().toISOString();
@@ -114,10 +97,85 @@ export function escapeCSVField(value) {
 }
 
 /**
- * Sanitize a string for safe text display (strips control characters).
+ * Normalize a string for storage and display.
+ *
+ * Strips C0/C1 control characters, and the Unicode bidirectional override and
+ * isolate formatting characters (U+202A-U+202E, U+2066-U+2069). Those are the
+ * primitive behind "Trojan Source" style attacks: they let a custodian name or
+ * note render in a different order than it is stored, so a human reviewer and
+ * the hash disagree about what the record says. Legitimate right-to-left text
+ * renders correctly through the Unicode bidi algorithm without them.
+ *
+ * This runs on input before an entry is hashed, so what is displayed and what
+ * is committed to the chain are the same bytes. It is NOT an HTML escaping
+ * function — use the `html` tagged template for that.
  */
 export function sanitizeText(value) {
   if (typeof value !== 'string') return '';
+  // Written as escape sequences on purpose: spelling these characters
+  // literally would make this very file's source misleading to read.
   // eslint-disable-next-line no-control-regex
-  return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+  return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, '');
+}
+
+/**
+ * Markup that is already safe to insert. Produced by `html` and `raw`.
+ */
+class SafeHTML {
+  constructor(value) {
+    this.value = value;
+  }
+
+  toString() {
+    return this.value;
+  }
+}
+
+/**
+ * Escape a value for interpolation into HTML.
+ * Covers text content and both single- and double-quoted attribute contexts.
+ */
+export function escapeHTML(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Mark a string as trusted markup, exempting it from escaping.
+ * Only ever call this on literals authored in this repository.
+ */
+export function raw(value) {
+  return new SafeHTML(String(value));
+}
+
+function interpolate(value) {
+  if (value instanceof SafeHTML) return value.value;
+  if (value === null || value === undefined || value === false) return '';
+  // Arrays are joined here rather than by the caller: calling .join('') on an
+  // array of SafeHTML would collapse it to a plain string, which would then be
+  // escaped a second time.
+  if (Array.isArray(value)) return value.map(interpolate).join('');
+  return escapeHTML(value);
+}
+
+/**
+ * Tagged template that escapes every interpolated value by default.
+ *
+ *   element.innerHTML = html`<span>${untrustedName}</span>`;
+ *
+ * Nested html`` fragments and arrays of them compose without double-escaping.
+ * Anything else — including a plain string containing markup — is escaped.
+ * This inverts the previous default: markup safety no longer depends on the
+ * author remembering to escape at each of ~40 interpolation sites.
+ */
+export function html(strings, ...values) {
+  let out = strings[0];
+  for (let i = 0; i < values.length; i++) {
+    out += interpolate(values[i]) + strings[i + 1];
+  }
+  return new SafeHTML(out);
 }
