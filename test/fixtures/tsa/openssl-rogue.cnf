@@ -1,0 +1,43 @@
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+new_certs_dir = .
+database      = index.txt
+serial        = serial
+default_md    = sha256
+policy        = policy_any
+
+[ policy_any ]
+countryName            = optional
+stateOrProvinceName    = optional
+organizationName       = optional
+organizationalUnitName = optional
+commonName             = supplied
+emailAddress           = optional
+
+[ tsa ]
+default_tsa = tsa_config1
+
+[ tsa_config1 ]
+serial = rogue_serial
+crypto_device         = builtin
+signer_cert = rogue-tsa.crt
+certs = rogue-ca.crt
+signer_key = rogue-tsa.key
+signer_digest         = sha256
+default_policy        = 1.2.3.4.1
+other_policies        = 1.2.3.4.5, 1.2.3.4.6
+digests               = sha256, sha384, sha512
+accuracy              = secs:1, millisecs:500, microsecs:100
+clock_precision_digits= 0
+ordering              = yes
+tsa_name              = yes
+ess_cert_id_chain     = no
+ess_cert_id_alg       = sha256
+
+[ tsa_cert_ext ]
+basicConstraints    = CA:FALSE
+keyUsage            = critical, nonRepudiation, digitalSignature
+extendedKeyUsage    = critical, timeStamping
+subjectKeyIdentifier= hash
