@@ -93,9 +93,11 @@ test('the embedded verifier reproduces the app entry hashes', async () => {
   const entries = await buildChain(4);
   const { embeddedStringify, source } = extractEmbedded(generateHTMLReport(entries));
 
-  const fields = JSON.parse(/const HASHED_FIELDS = (\[[^\]]*\]);/.exec(source)[1]);
+  const byVersion = JSON.parse(/const HASHED_FIELDS_BY_VERSION = (\{[\s\S]*?\});/.exec(source)[1]);
 
   for (const entry of entries) {
+    const fields = byVersion[entry.schema_version];
+    assert.ok(fields, `report has no field list for schema_version ${entry.schema_version}`);
     const hashable = {};
     for (const key of fields) hashable[key] = entry[key];
     const bytes = new TextEncoder().encode(embeddedStringify(hashable));
@@ -107,12 +109,28 @@ test('the embedded verifier reproduces the app entry hashes', async () => {
   }
 });
 
-test('the report carries the same schema version and field list as the app', async () => {
+test('the report carries the same supported versions and field lists as the app', async () => {
   const { source } = extractEmbedded(generateHTMLReport(await buildChain(1)));
-  const { SCHEMA_VERSION, HASHED_FIELDS } = await import('../src/chain.js');
+  const { SUPPORTED_VERSIONS, HASHED_FIELDS_BY_VERSION } = await import('../src/chain.js');
 
-  assert.equal(Number(/const SCHEMA_VERSION = (\d+);/.exec(source)[1]), SCHEMA_VERSION);
-  assert.deepEqual(JSON.parse(/const HASHED_FIELDS = (\[[^\]]*\]);/.exec(source)[1]), HASHED_FIELDS);
+  assert.deepEqual(
+    JSON.parse(/const SUPPORTED_VERSIONS = (\[[^\]]*\]);/.exec(source)[1]),
+    SUPPORTED_VERSIONS,
+  );
+  assert.deepEqual(
+    JSON.parse(/const HASHED_FIELDS_BY_VERSION = (\{[\s\S]*?\});/.exec(source)[1]),
+    HASHED_FIELDS_BY_VERSION,
+  );
+});
+
+test('the report can still verify chains written under the previous format', async () => {
+  // The reason schema_version exists. A v2 entry must hash under the v2 field
+  // list in the report exactly as it does in the app.
+  const { source } = extractEmbedded(generateHTMLReport([]));
+  const byVersion = JSON.parse(/const HASHED_FIELDS_BY_VERSION = (\{[\s\S]*?\});/.exec(source)[1]);
+  assert.ok(Array.isArray(byVersion['2']), 'report dropped support for v2 chains');
+  assert.ok(!byVersion['2'].includes('time_bound'));
+  assert.ok(byVersion['3'].includes('time_bound'));
 });
 
 test('the embedded verifier checks order and chain identity, not just hashes', async () => {
@@ -121,5 +139,5 @@ test('the embedded verifier checks order and chain identity, not just hashes', a
   // or spliced chain read as intact there even when the app caught it.
   assert.match(source, /entry\.seq !== i/);
   assert.match(source, /entry\.chain_id !== chainId/);
-  assert.match(source, /entry\.schema_version !== SCHEMA_VERSION/);
+  assert.match(source, /SUPPORTED_VERSIONS\.includes\(entry\.schema_version\)/);
 });

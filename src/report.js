@@ -8,7 +8,7 @@
 
 import { escapeCSVField, truncateHash, html, raw } from './utils.js';
 import { sortedStringify } from './canonical.js';
-import { HASHED_FIELDS, SCHEMA_VERSION, GENESIS } from './chain.js';
+import { HASHED_FIELDS_BY_VERSION, SUPPORTED_VERSIONS, GENESIS } from './chain.js';
 
 /**
  * Sanity-check the encoder source about to be embedded.
@@ -50,16 +50,18 @@ function checkEncoderSource(source) {
 function verifierSource() {
   const encoderSource = checkEncoderSource(sortedStringify.toString());
   return `
-const SCHEMA_VERSION = ${JSON.stringify(SCHEMA_VERSION)};
+const SUPPORTED_VERSIONS = ${JSON.stringify(SUPPORTED_VERSIONS)};
 const GENESIS = ${JSON.stringify(GENESIS)};
-const HASHED_FIELDS = ${JSON.stringify(HASHED_FIELDS)};
+const HASHED_FIELDS_BY_VERSION = ${JSON.stringify(HASHED_FIELDS_BY_VERSION)};
 const ENTRIES = JSON.parse(document.getElementById('chain-data').textContent);
 
 const sortedStringify = ${encoderSource};
 
 async function computeEntryHash(entry) {
+  const fields = HASHED_FIELDS_BY_VERSION[entry.schema_version];
+  if (!fields) throw new Error('unsupported schema_version ' + entry.schema_version);
   const hashable = {};
-  for (const key of HASHED_FIELDS) hashable[key] = entry[key];
+  for (const key of fields) hashable[key] = entry[key];
   const bytes = new TextEncoder().encode(sortedStringify(hashable));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
@@ -89,7 +91,7 @@ async function verify() {
       setResult('CHAIN BROKEN at entry ' + (i + 1) + ' — ' + reason, 'broken');
     };
 
-    if (entry.schema_version !== SCHEMA_VERSION) {
+    if (!SUPPORTED_VERSIONS.includes(entry.schema_version)) {
       fail('FORMAT', 'unsupported schema version'); return;
     }
     if (entry.seq !== i) {
