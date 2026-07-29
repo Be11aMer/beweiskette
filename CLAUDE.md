@@ -12,7 +12,9 @@ Digital evidence chain of custody — client-side web application.
   bar — "client-side only" is why people choose this tool.
 - Hash chain must remain intact across all operations. Append-only.
 - `npm test` uses Node's built-in runner. No test framework dependency.
-- Deploys as static files to Cloudflare Pages.
+- Deploys as static files to Cloudflare Workers (assets only, no Worker
+  script). wrangler.jsonc uses `assets.directory`, NOT the Pages-only
+  `pages_build_output_dir` — that mismatch broke a deploy once already.
 
 ## Architecture
 - src/crypto.js: Web Crypto API (SHA-256) wrappers

@@ -199,11 +199,16 @@ break silently.
 ### Deploy
 
 ```bash
-npm run deploy   # Cloudflare Pages, via wrangler.jsonc
+npm run deploy   # Cloudflare Workers static assets, via wrangler.jsonc
 ```
 
-`public/_headers` carries the CSP and related headers. If you deploy somewhere
-else, port it — and confirm the headers are actually being sent.
+Deployed as a Worker that serves static assets, with no Worker script — there
+is no server-side code, which is the point.
+
+`public/_headers` carries the CSP and related headers; Workers static assets
+consume that file rather than serving it, verified with `wrangler dev`. If you
+deploy somewhere else, port it — and confirm the headers are actually being
+sent, rather than assuming.
 
 ## Relationship to Zeitkette
 

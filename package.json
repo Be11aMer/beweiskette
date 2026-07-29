@@ -33,7 +33,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test",
-    "deploy": "npm run build && npx wrangler pages deploy dist"
+    "deploy": "npm run build && npx wrangler deploy"
   },
   "devDependencies": {
     "vite": "^6.0.0"
