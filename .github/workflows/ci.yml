@@ -14,8 +14,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 18 is the floor declared in package.json engines; 22 is current.
-        node: [18, 22]
+        # 20 is the floor declared in package.json engines, and is tested here
+        # so that claim stays verified rather than assumed — an untested
+        # `engines` field is how this job came to claim Node 18 support it
+        # never had.
+        #
+        # Measured, not guessed: on 18.20.8 the suite produces 74 failures.
+        # Node 18's test runner spawns child processes without
+        # globalThis.crypto (the main process has it; the children do not,
+        # unless --experimental-global-webcrypto is passed), and globalThis.File
+        # is absent entirely. Node 20 passes all 197.
+        node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +37,23 @@ jobs:
 
       # The suite uses Node's built-in runner, so there is nothing to install
       # beyond the build tooling.
-      - run: npm test
+      #
+      # `node --test` exits 0 when it discovers no test files at all, so a
+      # refactor that moved or renamed the test directory would turn this job
+      # green with nothing run — worse than a red build. Assert a floor on the
+      # number of tests so an empty suite cannot pass.
+      - name: Run tests
+        # Explicit shell: bash gives -eo pipefail, so a genuine test failure
+        # still fails the step despite the pipe into tee.
+        shell: bash
+        run: |
+          npm test 2>&1 | tee test-output.txt
+          passed=$(grep -oE '^# pass [0-9]+' test-output.txt | tail -1 | grep -oE '[0-9]+')
+          if [ "${passed:-0}" -lt 150 ]; then
+            echo "::error::Only ${passed:-0} tests ran (expected at least 150). Test discovery is broken."
+            exit 1
+          fi
+          echo "$passed tests passed."
 
       - run: npm run build
 

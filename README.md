@@ -178,6 +178,11 @@ output is plain static files.
 
 ## Development
 
+Requires **Node 20 or newer**. The test suite needs `globalThis.File` and a
+`globalThis.crypto` that survives into the test runner's child processes;
+neither holds on Node 18. CI runs the suite on 20, 22 and 24, so the declared
+floor stays tested rather than assumed.
+
 ```bash
 git clone https://github.com/Be11aMer/beweiskette.git
 cd beweiskette
