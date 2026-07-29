@@ -8,7 +8,7 @@
 
 import { escapeCSVField, truncateHash, html, raw } from './utils.js';
 import { sortedStringify } from './canonical.js';
-import { HASHED_FIELDS, SCHEMA_VERSION, GENESIS } from './chain.js';
+import { HASHED_FIELDS_BY_VERSION, SUPPORTED_VERSIONS, GENESIS } from './chain.js';
 
 /**
  * Sanity-check the encoder source about to be embedded.
@@ -50,16 +50,18 @@ function checkEncoderSource(source) {
 function verifierSource() {
   const encoderSource = checkEncoderSource(sortedStringify.toString());
   return `
-const SCHEMA_VERSION = ${JSON.stringify(SCHEMA_VERSION)};
+const SUPPORTED_VERSIONS = ${JSON.stringify(SUPPORTED_VERSIONS)};
 const GENESIS = ${JSON.stringify(GENESIS)};
-const HASHED_FIELDS = ${JSON.stringify(HASHED_FIELDS)};
+const HASHED_FIELDS_BY_VERSION = ${JSON.stringify(HASHED_FIELDS_BY_VERSION)};
 const ENTRIES = JSON.parse(document.getElementById('chain-data').textContent);
 
 const sortedStringify = ${encoderSource};
 
 async function computeEntryHash(entry) {
+  const fields = HASHED_FIELDS_BY_VERSION[entry.schema_version];
+  if (!fields) throw new Error('unsupported schema_version ' + entry.schema_version);
   const hashable = {};
-  for (const key of HASHED_FIELDS) hashable[key] = entry[key];
+  for (const key of fields) hashable[key] = entry[key];
   const bytes = new TextEncoder().encode(sortedStringify(hashable));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
@@ -89,7 +91,7 @@ async function verify() {
       setResult('CHAIN BROKEN at entry ' + (i + 1) + ' — ' + reason, 'broken');
     };
 
-    if (entry.schema_version !== SCHEMA_VERSION) {
+    if (!SUPPORTED_VERSIONS.includes(entry.schema_version)) {
       fail('FORMAT', 'unsupported schema version'); return;
     }
     if (entry.seq !== i) {
@@ -159,6 +161,43 @@ export function generateCSV(entries) {
  */
 export function embedJSON(value) {
   return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+/**
+ * Wrap a chain and its anchors for export.
+ *
+ * Anchors travel with the chain so a recipient can detect a truncated tail
+ * without having been sent a receipt beforehand — previously the only way to
+ * catch it. A signed timestamp token in here is checkable by someone who has
+ * never seen anything from us before.
+ */
+export function buildEnvelope(entries, anchors = []) {
+  return {
+    format: 'beweiskette-chain',
+    schema_version: SUPPORTED_VERSIONS[SUPPORTED_VERSIONS.length - 1],
+    exported_at: new Date().toISOString(),
+    chain: entries,
+    anchors,
+  };
+}
+
+/**
+ * Read either an envelope or a bare array of entries.
+ *
+ * Exports from before envelopes existed are plain arrays, and they must keep
+ * importing — a verifier that rejects last month's export is not much of a
+ * verifier.
+ */
+export function readEnvelope(parsed) {
+  if (Array.isArray(parsed)) return { chain: parsed, anchors: [], legacy: true };
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.chain)) {
+    return {
+      chain: parsed.chain,
+      anchors: Array.isArray(parsed.anchors) ? parsed.anchors : [],
+      legacy: false,
+    };
+  }
+  return null;
 }
 
 export function generateHTMLReport(entries) {

@@ -1,5 +1,5 @@
 /**
- * Hash chain construction and verification (chain format v2).
+ * Hash chain construction and verification (chain format v3, verifying v2 too).
  *
  * These are the behavioural guarantees the whole tool rests on: an unmodified
  * chain verifies, and any modification, reordering or removal is detected at
@@ -17,6 +17,7 @@ import {
   validateEntry,
   GENESIS,
   SCHEMA_VERSION,
+  SUPPORTED_VERSIONS,
 } from '../src/chain.js';
 
 /** Build a chain of n entries. */
@@ -282,4 +283,113 @@ test('entries registered in the same millisecond still verify', async () => {
 
   const result = await verifyChain(entries);
   assert.equal(result.intact, true, result.details);
+});
+
+// ── Format versions ────────────────────────────────────────────────
+
+/** Hand-build a v2 entry, as the previous release would have written it. */
+async function buildV2Entry(chainId, seq, prevHash) {
+  const entry = {
+    schema_version: 2,
+    chain_id: chainId,
+    seq,
+    id: `legacy-${seq}`,
+    timestamp_registered: '2026-07-24T12:00:00.000Z',
+    evidence: {
+      file_hash: String(seq).padStart(64, '0'),
+      file_name: `legacy-${seq}.jpg`,
+      file_size: 10 + seq,
+      file_type: 'image/jpeg',
+      file_last_modified: '2026-01-01T00:00:00.000Z',
+    },
+    metadata: null,
+    custody: { custodian: 'A. Muster', case_reference: 'CASE-1', notes: '' },
+    prev_hash: prevHash,
+  };
+  entry.entry_hash = await computeEntryHash(entry);
+  return entry;
+}
+
+test('chains written under format v2 still verify', async () => {
+  // The whole point of having stamped schema_version: an upgrade must not
+  // strand existing chains, and each entry is hashed under its own rules.
+  const chainId = createChainId();
+  const a = await buildV2Entry(chainId, 0, GENESIS);
+  const b = await buildV2Entry(chainId, 1, a.entry_hash);
+
+  const result = await verifyChain([a, b]);
+  assert.equal(result.intact, true, result.details);
+  assert.equal(result.entries, 2);
+});
+
+test('a v2 entry is hashed without time_bound, a v3 entry with it', async () => {
+  const chainId = createChainId();
+  const v2 = await buildV2Entry(chainId, 0, GENESIS);
+  // Attaching time_bound to a v2 entry must not change its digest, because
+  // the field is not part of the v2 field list.
+  const before = v2.entry_hash;
+  v2.time_bound = { beacon: { source: 'x', pulse_index: 1, chain_index: 1, output_value: 'ab'.repeat(64), pulse_time: 'now' } };
+  assert.equal(await computeEntryHash(v2), before);
+
+  const [v3] = await buildChain(1);
+  assert.equal(v3.schema_version, SCHEMA_VERSION);
+  assert.equal(v3.time_bound, null);
+});
+
+test('time_bound is covered by the v3 digest', async () => {
+  // A bound attached after the fact would prove nothing, so changing it must
+  // break the entry.
+  const chainId = createChainId();
+  const entry = await createEntry({
+    evidence: {
+      file_hash: '00'.repeat(32),
+      file_name: 'a.jpg',
+      file_size: 1,
+      file_type: 'image/jpeg',
+      file_last_modified: '2026-01-01T00:00:00.000Z',
+    },
+    metadata: null,
+    custody: { custodian: 'A', case_reference: '', notes: '' },
+    prevHash: GENESIS,
+    seq: 0,
+    chainId,
+    timeBound: {
+      beacon: {
+        source: 'nist-beacon-2.0',
+        chain_index: 1,
+        pulse_index: 4242,
+        output_value: 'ab'.repeat(64),
+        pulse_time: '2026-07-25T05:42:00.000Z',
+      },
+    },
+  });
+
+  assert.equal((await verifyChain([entry])).intact, true);
+
+  entry.time_bound.beacon.pulse_index = 4243;
+  const result = await verifyChain([entry]);
+  assert.equal(result.intact, false);
+  assert.match(result.details, /modified/);
+});
+
+test('a v3 entry with a malformed time_bound is rejected', async () => {
+  const cases = [
+    ['missing field', (e) => { e.time_bound = {}; }],
+    ['not an object', (e) => { e.time_bound = 'soon'; }],
+    ['bad pulse index', (e) => { e.time_bound = { beacon: { source: 'x', pulse_index: -1, chain_index: 0, output_value: 'ab'.repeat(64), pulse_time: 't' } }; }],
+    ['bad output value', (e) => { e.time_bound = { beacon: { source: 'x', pulse_index: 1, chain_index: 0, output_value: 'nope', pulse_time: 't' } }; }],
+    ['absent entirely', (e) => { delete e.time_bound; }],
+  ];
+  for (const [name, mutate] of cases) {
+    const [entry] = await buildChain(1);
+    mutate(entry);
+    assert.ok(validateEntry(entry), `accepted a v3 entry with ${name}`);
+  }
+});
+
+test('an unknown schema version is refused rather than guessed at', async () => {
+  const [entry] = await buildChain(1);
+  entry.schema_version = 99;
+  assert.match(validateEntry(entry), /unsupported schema_version/);
+  await assert.rejects(() => computeEntryHash(entry), /schema_version/);
 });

@@ -180,3 +180,93 @@ export async function checkAnchor(entries, receipt) {
       : 'Anchor confirmed. The chain matches the published receipt exactly.',
   };
 }
+
+// ── Anchor records ─────────────────────────────────────────────────
+
+/**
+ * How an anchor was obtained, weakest to strongest.
+ *
+ * `published` covers a receipt the user posted somewhere themselves. It is not
+ * inferior in principle — a receipt in a pushed git commit is excellent
+ * evidence — but the app cannot confirm it happened, whereas it can check a
+ * timestamp token without any help.
+ */
+export const ANCHOR_METHOD = {
+  PUBLISHED: 'published',
+  TSA: 'rfc3161',
+};
+
+/**
+ * Build the record stored for an anchor, and carried in exports.
+ *
+ * The token is kept as base64 rather than parsed-and-summarised: the signature
+ * is over the bytes, so a summary could not be re-verified by anyone later.
+ */
+export function createAnchorRecord({ receipt, method, token = null, genTime = null, status = null, obtainedAt = new Date().toISOString() }) {
+  return {
+    seq: receipt.seq,
+    chain_id: receipt.chain_id,
+    head_hash: receipt.head_hash,
+    entry_count: receipt.entry_count,
+    method,
+    receipt: formatReceipt(receipt),
+    token,
+    gen_time: genTime,
+    status,
+    obtained_at: obtainedAt,
+  };
+}
+
+/** Encode raw token bytes for storage and export. */
+export function encodeToken(bytes) {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+/** Decode a stored token back to bytes. Returns null if unreadable. */
+export function decodeToken(base64) {
+  try {
+    const binary = atob(String(base64));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Summarise how well anchored a chain is.
+ *
+ * The gap is the point: entries after the last anchor are the ones that could
+ * be removed without any published evidence contradicting it. Keeping that
+ * number visible is what keeps the window small.
+ */
+export function anchorCoverage(entries, anchors) {
+  const height = entries.length ? entries[entries.length - 1].seq : -1;
+  const usable = (anchors || []).filter((a) => a && Number.isInteger(a.seq) && a.seq <= height);
+
+  if (usable.length === 0) {
+    return {
+      anchored: false,
+      latestSeq: null,
+      unanchored: entries.length,
+      summary: entries.length
+        ? `No anchors. All ${entries.length} entries could be removed without contradicting anything published.`
+        : 'No entries yet.',
+    };
+  }
+
+  const latest = usable.reduce((a, b) => (b.seq > a.seq ? b : a));
+  const unanchored = height - latest.seq;
+  return {
+    anchored: true,
+    latestSeq: latest.seq,
+    latestMethod: latest.method,
+    unanchored,
+    summary: unanchored === 0
+      ? `Anchored through the current head (entry ${latest.seq + 1}).`
+      : `Anchored through entry ${latest.seq + 1}; ${unanchored} later ${unanchored === 1 ? 'entry is' : 'entries are'} not yet covered.`,
+  };
+}

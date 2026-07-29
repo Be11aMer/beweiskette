@@ -917,3 +917,9 @@ body {
 }
 
 .banner-dismiss:hover { color: var(--text-primary); }
+
+.receipt-coverage {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 12px;
+}

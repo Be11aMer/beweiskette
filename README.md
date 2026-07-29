@@ -15,8 +15,10 @@ chain. Alter or reorder any past record and verification fails, at the exact
 entry.
 
 **Your files never leave the browser.** All SHA-256 hashing happens
-client-side using the Web Crypto API. There is no backend, no analytics, no
-telemetry, and no network request after the page loads.
+client-side using the Web Crypto API. There is no backend, no analytics and no
+telemetry. The app makes no network request on its own; the single exception is
+an optional trusted-timestamp query you trigger deliberately, which sends a
+32-byte digest of your chain head and nothing else.
 
 MIT licensed. Fork it, extend it, build on it.
 
@@ -30,9 +32,15 @@ none was reordered, that none was removed from the middle, and that the
 records all belong to the same chain. Verification recomputes every hash
 rather than comparing stored values.
 
-**It does not prove *when*.** Timestamps come from the registering machine's
-clock, which the person making the records controls. A chain dated last year
-is indistinguishable from one built this morning on a back-dated laptop.
+**It does not prove *when*, on its own.** `timestamp_registered` comes from the
+registering machine's clock, which the person making the records controls, so
+a chain dated last year is indistinguishable from one built this morning on a
+back-dated laptop. Fetching the time from an API would not fix this — an
+unsigned assertion of time is unverifiable whatever its origin, because the
+verifier cannot tell "the app fetched this" from "the producer typed it in".
+What does fix it is a value *signed by the time source*: request an RFC 3161
+timestamp and the authority signs your head hash together with its clock
+reading, which anyone can then check.
 
 **It does not prove *completeness*.** Delete the last three entries from an
 exported chain and the rest still verifies as INTACT — nothing inside the file
@@ -126,7 +134,8 @@ generator.
 | **Strict CSP** | `default-src 'none'`, no inline scripts, no inline styles, no `unsafe-eval`. See `public/_headers`. |
 | **Tail truncation** | **Not** detected without a published anchor receipt. |
 | **Whole-chain forgery** | **Not** detected. No signatures. Use an anchor. |
-| **Wall-clock time** | **Not** established. The clock belongs to whoever makes the records. |
+| **Trusted timestamp** | Optional RFC 3161 anchoring. Tokens are verified in-browser — message imprint binding, signed messageDigest, timeStamping EKU, validity window, and the CMS signature — against **pinned** signer keys. |
+| **Self-asserted time** | `timestamp_registered` proves nothing on its own. The clock belongs to whoever makes the records. |
 
 On constant-time comparison: `constantTimeEqual` is used consistently, but it
 should not be read as a security property here. There is no secret — both
@@ -142,7 +151,11 @@ src/
 ├── sha256.js      Incremental SHA-256, for files too large to buffer
 ├── canonical.js   Canonical JSON encoder — the exact bytes that get hashed
 ├── chain.js       Chain construction, validation, verification
-├── anchor.js      Head receipts and anchor checking
+├── anchor.js      Head receipts, anchor records, coverage
+├── asn1.js        Strict DER parser/encoder (DER only, rejects BER)
+├── rfc3161.js     Timestamp requests and CMS signature verification
+├── beacon.js      Randomness-beacon lower bound
+├── settings.js    Timestamp authority URL and pinned keys
 ├── store.js       IndexedDB persistence (raw API)
 ├── exif.js        Minimal JPEG EXIF parser
 ├── report.js      CSV and self-contained HTML report generation
@@ -165,6 +178,11 @@ output is plain static files.
 
 ## Development
 
+Requires **Node 20 or newer**. The test suite needs `globalThis.File` and a
+`globalThis.crypto` that survives into the test runner's child processes;
+neither holds on Node 18. CI runs the suite on 20, 22 and 24, so the declared
+floor stays tested rather than assumed.
+
 ```bash
 git clone https://github.com/Be11aMer/beweiskette.git
 cd beweiskette
@@ -181,11 +199,16 @@ break silently.
 ### Deploy
 
 ```bash
-npm run deploy   # Cloudflare Pages, via wrangler.jsonc
+npm run deploy   # Cloudflare Workers static assets, via wrangler.jsonc
 ```
 
-`public/_headers` carries the CSP and related headers. If you deploy somewhere
-else, port it — and confirm the headers are actually being sent.
+Deployed as a Worker that serves static assets, with no Worker script — there
+is no server-side code, which is the point.
+
+`public/_headers` carries the CSP and related headers; Workers static assets
+consume that file rather than serving it, verified with `wrangler dev`. If you
+deploy somewhere else, port it — and confirm the headers are actually being
+sent, rather than assuming.
 
 ## Relationship to Zeitkette
 

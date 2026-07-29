@@ -2,11 +2,22 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "beweiskette",
   "compatibility_date": "2026-07-23",
-  // Static asset hosting with SPA fallback.
-  // "single-page-application" serves index.html for any route that doesn't
-  // match a static file — no _redirects file needed, no infinite loops.
+
+  // A Worker that serves static assets, with no Worker script at all.
+  //
+  // This was previously `pages_build_output_dir`, which is a Pages-only key.
+  // Under Workers it is ignored, so wrangler found neither a `main` entry point
+  // nor an assets directory and refused to deploy. There is no server-side code
+  // here and there should not be — the whole point of the tool is that hashing
+  // and verification happen in the browser.
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+
+    // Unknown paths return 404 rather than falling back to index.html. The app
+    // is a single page whose tabs swap views in place without touching the URL,
+    // so there are no client-side routes to rescue, and
+    // "single-page-application" would serve the app from every bogus path
+    // instead of saying "not found".
+    "not_found_handling": "none"
   }
 }

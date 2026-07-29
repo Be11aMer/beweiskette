@@ -2,15 +2,16 @@
  * Export view — export chain as JSON, CSV, or self-contained HTML report.
  */
 
-import { getAllEntries, clearAll } from '../store.js';
+import { getAllEntries, getAnchors, clearAll, clearAnchors } from '../store.js';
 import { html } from '../utils.js';
-import { generateCSV, generateHTMLReport } from '../report.js';
+import { generateCSV, generateHTMLReport, buildEnvelope } from '../report.js';
 import { showToast } from '../main.js';
 
 let selectedFormat = 'json';
 
 export async function render(container) {
   const entries = await getAllEntries();
+  const anchors = await getAnchors();
   selectedFormat = 'json';
 
   container.innerHTML = html`
@@ -84,7 +85,7 @@ export async function render(container) {
     });
   });
 
-  container.querySelector('#download-btn').addEventListener('click', () => downloadExport(entries));
+  container.querySelector('#download-btn').addEventListener('click', () => downloadExport(entries, anchors));
 
   // The chain is append-only by construction — there is no API to edit or
   // remove a single entry — but wholesale destruction is still one click away,
@@ -106,6 +107,7 @@ export async function render(container) {
     }
     try {
       await clearAll();
+      await clearAnchors();
       showToast(`Deleted ${entries.length} entries.`);
       render(container);
     } catch (err) {
@@ -114,11 +116,11 @@ export async function render(container) {
   });
 }
 
-function downloadExport(entries) {
+function downloadExport(entries, anchors) {
   let content, filename, mimeType;
 
   if (selectedFormat === 'json') {
-    content = JSON.stringify(entries, null, 2);
+    content = JSON.stringify(buildEnvelope(entries, anchors), null, 2);
     filename = `beweiskette_export_${dateStamp()}.json`;
     mimeType = 'application/json';
   } else if (selectedFormat === 'csv') {

@@ -2,14 +2,20 @@
  * Hash chain logic for evidence entries.
  * SHA-256 over a deterministic JSON encoding, linked via prev_hash.
  *
- * Chain format v2. Three fields are covered by the digest that v1 lacked:
+ * Chain format v3. Fields covered by the digest, and why:
  *
- *   schema_version  so a future change to the encoding is detectable in-band
- *                   rather than silently invalidating every existing chain
+ *   schema_version  so a change to the encoding is detectable in-band rather
+ *                   than silently invalidating every existing chain
  *   seq             explicit height, so ordering is a property of the record
  *                   rather than of whatever order the storage layer returned
  *   chain_id        per-chain identity, so entries from two separate chains
  *                   cannot be spliced into one file that still verifies
+ *   time_bound      a randomness-beacon pulse establishing "no earlier than"
+ *                   (v3). Inside the digest because a bound attached after the
+ *                   fact could be chosen once the desired answer was known.
+ *
+ * v2 entries remain verifiable: each entry is hashed under the field list for
+ * its own schema_version. That is what the version field was added for.
  *
  * What this construction does and does not establish is documented in
  * docs/THREAT_MODEL.md. In short: it detects modification, reordering and
@@ -24,7 +30,12 @@ import { sortedStringify } from './canonical.js';
 import { generateId, nowISO } from './utils.js';
 
 const GENESIS = 'GENESIS';
-export const SCHEMA_VERSION = 2;
+
+/** The version stamped on newly created entries. */
+export const SCHEMA_VERSION = 3;
+
+/** Versions this build can verify. */
+export const SUPPORTED_VERSIONS = [2, 3];
 
 /**
  * Exactly the fields covered by entry_hash, in no particular order — the
@@ -35,7 +46,7 @@ export const SCHEMA_VERSION = 2;
  * becomes part of the digest, so what a given entry_hash commits to depends on
  * the shape of the object rather than on the format.
  */
-export const HASHED_FIELDS = [
+const V2_FIELDS = [
   'schema_version',
   'chain_id',
   'seq',
@@ -46,6 +57,30 @@ export const HASHED_FIELDS = [
   'custody',
   'prev_hash',
 ];
+
+/**
+ * v3 adds `time_bound`, which carries the randomness-beacon pulse that
+ * establishes "no earlier than". It has to be inside the digest: a bound
+ * attached after the fact would prove nothing, since it could be chosen once
+ * the desired answer was known.
+ */
+const V3_FIELDS = [...V2_FIELDS, 'time_bound'];
+
+/**
+ * The hashed field list, by schema version.
+ *
+ * Keeping both is the point of having stamped a version in the first place.
+ * A second breaking migration would have been the easy option; making the
+ * field earn its keep means chains written by the previous release stay
+ * verifiable, and each entry is hashed under the rules it was created with.
+ */
+export const HASHED_FIELDS_BY_VERSION = {
+  2: V2_FIELDS,
+  3: V3_FIELDS,
+};
+
+/** Fields hashed for entries created by this build. */
+export const HASHED_FIELDS = V3_FIELDS;
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -66,7 +101,7 @@ export function createChainId() {
  * @param {string} params.chainId   - identity of the chain being appended to
  * @returns {Promise<Object>} complete entry with entry_hash
  */
-export async function createEntry({ evidence, metadata, custody, prevHash, seq, chainId }) {
+export async function createEntry({ evidence, metadata, custody, prevHash, seq, chainId, timeBound = null }) {
   const entry = {
     schema_version: SCHEMA_VERSION,
     chain_id: chainId,
@@ -77,6 +112,7 @@ export async function createEntry({ evidence, metadata, custody, prevHash, seq, 
     metadata: metadata || null,
     custody,
     prev_hash: prevHash || GENESIS,
+    time_bound: timeBound || null,
   };
 
   entry.entry_hash = await computeEntryHash(entry);
@@ -88,8 +124,12 @@ export async function createEntry({ evidence, metadata, custody, prevHash, seq, 
  * Uses deterministic serialization (sorted keys, no whitespace).
  */
 export async function computeEntryHash(entry) {
+  const fields = HASHED_FIELDS_BY_VERSION[entry && entry.schema_version];
+  if (!fields) {
+    throw new Error(`cannot hash an entry with schema_version ${JSON.stringify(entry && entry.schema_version)}`);
+  }
   const hashable = {};
-  for (const key of HASHED_FIELDS) {
+  for (const key of fields) {
     hashable[key] = entry[key];
   }
   return hashString(sortedStringify(hashable));
@@ -117,8 +157,8 @@ function isNonEmptyString(value) {
 export function validateEntry(entry) {
   if (!isPlainObject(entry)) return 'entry is not an object';
 
-  if (entry.schema_version !== SCHEMA_VERSION) {
-    return `unsupported schema_version ${JSON.stringify(entry.schema_version)} (expected ${SCHEMA_VERSION})`;
+  if (!SUPPORTED_VERSIONS.includes(entry.schema_version)) {
+    return `unsupported schema_version ${JSON.stringify(entry.schema_version)} (supported: ${SUPPORTED_VERSIONS.join(', ')})`;
   }
   if (!isNonEmptyString(entry.chain_id)) return 'chain_id is missing or not a string';
   if (!Number.isInteger(entry.seq) || entry.seq < 0) return 'seq is not a non-negative integer';
@@ -144,6 +184,43 @@ export function validateEntry(entry) {
     return 'prev_hash is neither GENESIS nor a SHA-256 hex digest';
   }
   if (!HEX64.test(entry.entry_hash || '')) return 'entry_hash is not a SHA-256 hex digest';
+
+  if (entry.schema_version >= 3) {
+    const problem = validateTimeBound(entry.time_bound);
+    if (problem) return problem;
+  }
+
+  return null;
+}
+
+/**
+ * A v3 entry's `time_bound` is null, or a beacon pulse reference.
+ *
+ * Validated structurally here; whether the referenced pulse was actually
+ * published is a separate question answered against the beacon archive
+ * (src/beacon.js), not from the entry alone.
+ */
+function validateTimeBound(timeBound) {
+  if (timeBound === null || timeBound === undefined) {
+    return timeBound === undefined ? 'time_bound must be present (use null when absent)' : null;
+  }
+  if (!isPlainObject(timeBound)) return 'time_bound is neither null nor an object';
+
+  const beacon = timeBound.beacon;
+  if (beacon === undefined) return 'time_bound carries no beacon reference';
+  if (!isPlainObject(beacon)) return 'time_bound.beacon is not an object';
+
+  if (!isNonEmptyString(beacon.source)) return 'time_bound.beacon.source is missing';
+  if (!Number.isInteger(beacon.pulse_index) || beacon.pulse_index < 0) {
+    return 'time_bound.beacon.pulse_index is not a non-negative integer';
+  }
+  if (!Number.isInteger(beacon.chain_index) || beacon.chain_index < 0) {
+    return 'time_bound.beacon.chain_index is not a non-negative integer';
+  }
+  if (!/^[0-9a-f]{128}$/.test(beacon.output_value || '')) {
+    return 'time_bound.beacon.output_value is not a SHA-512 hex digest';
+  }
+  if (!isNonEmptyString(beacon.pulse_time)) return 'time_bound.beacon.pulse_time is missing';
 
   return null;
 }

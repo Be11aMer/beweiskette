@@ -1,0 +1,11 @@
+# DER-encoded fixtures. Their exact bytes are the thing under test — a token
+# whose line endings were "normalised" would fail signature verification and
+# look like a cryptography bug rather than a file-handling one.
+*.tsr binary
+*.tsq binary
+
+# PEM is text, but it is fixture input; keep it byte-stable across platforms.
+*.crt -text
+
+# Shared cross-language vector file. Zeitkette reads the same bytes.
+test/vectors/*.json -text
