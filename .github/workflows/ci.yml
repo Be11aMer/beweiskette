@@ -40,15 +40,26 @@ jobs:
       #
       # `node --test` exits 0 when it discovers no test files at all, so a
       # refactor that moved or renamed the test directory would turn this job
-      # green with nothing run — worse than a red build. Assert a floor on the
-      # number of tests so an empty suite cannot pass.
+      # green with nothing run — worse than a red build, because it is silent.
+      # Hence the floor on the number of tests.
+      #
+      # Both reporters are named explicitly rather than relying on the default.
+      # The default is a presentation choice and it changes: Node 20 and 22 emit
+      # TAP when stdout is not a TTY, Node 24 emits spec. An earlier version of
+      # this step parsed whatever the default produced and failed a green build
+      # on Node 24 for that reason alone. spec goes to the log for humans; TAP
+      # goes to a file for the check, so the machine-readable format is pinned
+      # no matter what Node defaults to next.
+      #
+      # Writing TAP to a file rather than piping through tee also means this
+      # step's exit code is npm's own, with no dependency on pipefail.
       - name: Run tests
-        # Explicit shell: bash gives -eo pipefail, so a genuine test failure
-        # still fails the step despite the pipe into tee.
-        shell: bash
         run: |
-          npm test 2>&1 | tee test-output.txt
-          passed=$(grep -oE '^# pass [0-9]+' test-output.txt | tail -1 | grep -oE '[0-9]+')
+          npm test -- \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=tap  --test-reporter-destination=test-output.tap
+
+          passed=$(grep -oE '^# pass [0-9]+' test-output.tap | tail -1 | grep -oE '[0-9]+')
           if [ "${passed:-0}" -lt 150 ]; then
             echo "::error::Only ${passed:-0} tests ran (expected at least 150). Test discovery is broken."
             exit 1
