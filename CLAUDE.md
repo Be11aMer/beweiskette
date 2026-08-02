@@ -20,7 +20,8 @@ Digital evidence chain of custody — client-side web application.
 - src/crypto.js: Web Crypto API (SHA-256) wrappers
 - src/canonical.js: Canonical JSON encoder — the exact bytes that get hashed.
   Self-contained on purpose: report.js embeds its source verbatim.
-- src/chain.js: Chain construction, validation, verification (format v2)
+- src/chain.js: Chain construction, validation, verification (format v3;
+  v2 still verifiable via HASHED_FIELDS_BY_VERSION)
 - src/anchor.js: Head receipts, anchor records, coverage
 - src/asn1.js: Strict DER parser/encoder (DER only, rejects BER)
 - src/rfc3161.js: Timestamp requests and CMS verification (pinned trust)

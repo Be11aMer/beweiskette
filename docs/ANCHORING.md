@@ -80,6 +80,55 @@ Verification results are three-valued and never collapse to two:
 | `UNVERIFIED` | Could not be checked — unpinned signer, unsupported algorithm. **Not** a statement that it is good |
 | `INVALID` | A check actively failed. Treat as tampered |
 
+### The browser may not be able to reach the authority
+
+Expect the in-app request to fail against most authorities, and understand why
+before concluding the tool is broken.
+
+An RFC 3161 request must carry `Content-Type: application/timestamp-query`.
+That is not a [CORS-safelisted][safelist] content type, so the browser sends a
+preflight `OPTIONS` first and will not deliver the real request unless the
+authority answers it with `Access-Control-Allow-Origin`. Timestamp authorities
+are built to be called by servers — by `openssl ts`, by signing pipelines, by
+CI — and most send no CORS headers at all. Nobody can call them from a web page,
+not just this app.
+
+[safelist]: https://developer.mozilla.org/en-US/docs/Glossary/CORS-safelisted_request_header
+
+The failure is also opaque by design: the browser rejects the response without
+telling the page why, so all the app can say is that the request did not
+arrive. It says that, and points here, rather than reporting a bare
+"Failed to fetch".
+
+**This is not worked around with a relay.** Proxying the request through a
+server would put a third party between you and the authority and would end the
+property this tool is built on — that it makes no network request you did not
+ask for, to anywhere you did not choose.
+
+The route that always works is the command line, and it produces exactly the
+same artifact:
+
+```bash
+# Copy the head receipt from the Chain tab, take its head hash, then:
+printf '%s' "<HEAD_HASH>" | xxd -r -p > head.bin
+openssl ts -query -data head.bin -sha256 -cert -out request.tsq
+curl -s -H 'Content-Type: application/timestamp-query' \
+     --data-binary @request.tsq https://freetsa.org/tsr > token.tsr
+base64 -w0 token.tsr
+```
+
+Paste that base64 into **Chain → Or paste a timestamp token** and the app
+verifies it in full: message-imprint binding against your head hash, the signed
+`messageDigest` attribute, the timeStamping EKU, the validity window, and the
+CMS signature against your pinned key. A verified token is stored as an anchor
+and travels with the export exactly as a directly-fetched one would.
+
+Verification is the part that carries the security value, and it never depended
+on the browser being able to make the request. No nonce is checked on this path
+— the token was minted by a request this page never saw, so there is nothing to
+compare against. That costs nothing: the token is bound to your head hash, and a
+token attesting to some *other* digest fails the imprint check.
+
 ### Checking a token independently
 
 The app pins signer keys rather than building an X.509 path to a root store.

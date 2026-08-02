@@ -23,10 +23,14 @@ jobs:
         # Node 18's test runner spawns child processes without
         # globalThis.crypto (the main process has it; the children do not,
         # unless --experimental-global-webcrypto is passed), and globalThis.File
-        # is absent entirely. Node 20 passes all 197.
+        # is absent entirely. Node 20 passes the whole suite.
         node: [20, 22, 24]
     steps:
+      # No job here pushes, so the checkout token has no reason to stay in the
+      # runner's git config after this step.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -73,7 +77,11 @@ jobs:
     # a deliberate decision, not something that arrives with a pull request.
     runs-on: ubuntu-latest
     steps:
+      # No job here pushes, so the checkout token has no reason to stay in the
+      # runner's git config after this step.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -93,7 +101,11 @@ jobs:
     # checked here instead of being discovered in production.
     runs-on: ubuntu-latest
     steps:
+      # No job here pushes, so the checkout token has no reason to stay in the
+      # runner's git config after this step.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Reject inline styles in application source
         run: |
           if grep -rn 'style="' src/ index.html --include='*.js' --include='*.html' \

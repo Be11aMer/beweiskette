@@ -37,7 +37,7 @@ the two, an entry is bracketed rather than merely bounded.
 | **A. Later editor** | Can read and write the exported chain file, or the browser's IndexedDB, *after* records were made. Wants to change or remove a record. | **Yes**, for modification and mid-chain removal. **Only with an anchor** for tail truncation. |
 | **B. Malicious counterparty** | Sends you a chain file to verify. Wants to make a forged chain look genuine, or to attack your machine through the verifier. | **Partly.** Injection is blocked. A wholly fabricated chain is indistinguishable from a genuine one without an anchor you trust. |
 | **C. Dishonest author** | Controls the machine and the clock at the time of registration. Wants to produce a chain that looks like it was made earlier, or that records false facts. | **No**, unless anchored. This is the fundamental limit. |
-| **D. Network attacker** | Sits between you and the app's origin, or between you and a timestamp authority. | **Partly.** Serve over HTTPS. Timestamp requests go over https only and carry a digest, and the returned token is verified against a pinned key — so a network attacker cannot substitute a token that verifies. |
+| **D. Network attacker** | Sits between you and the app's origin, or between you and a timestamp authority. | **Partly.** Serve over HTTPS. Timestamp requests go over https only and carry a digest, and the returned token is verified against a pinned key — so a network attacker cannot substitute a token that verifies. Note that the in-app request usually cannot complete at all; see *Reaching a timestamp authority* below. |
 | **E. Local malware** | Runs code on your machine while you use the app. | **No.** It can rewrite the chain and recompute valid hashes using the page's own code. |
 
 ## What is guaranteed
@@ -150,6 +150,57 @@ persistent storage and reports whether it was granted, but the browser decides.
 
 **Mitigation:** export regularly. Treat the browser as a working copy and
 exported files as the record.
+
+### Confidentiality of the chain
+
+Everything above is about integrity. This section is the other axis, and the
+answer is blunt: **the chain is not confidential, and the app does not try to
+make it so.**
+
+A chain holds identifying data by design — custodian names, case references,
+free-text notes, original filenames, and any GPS coordinates lifted out of EXIF.
+That is the record; a custody log with the names removed would not be one.
+
+- **IndexedDB is unencrypted at rest.** Anyone with the unlocked device, the
+  browser profile directory, or a backup containing it can read every entry.
+  Browser storage is a working area, not a safe.
+- **Exports are plain JSON.** The file you hand to someone contains the same
+  fields in the clear, and so does the HTML report.
+- **The one outbound request leaks nothing.** A timestamp query carries a
+  32-byte digest. The authority learns that *something* was timestamped and
+  nothing about what.
+
+**Not mitigated, as a decision rather than an oversight.** Passphrase-encrypting
+the store is the obvious suggestion and it is a bad trade here. It would add key
+management and a recovery story to a tool whose whole appeal is that it has
+neither, and against the adversary who actually threatens confidentiality —
+**E. Local malware**, already in the table — it fails anyway: that adversary
+reads the passphrase as it is typed. What it would reliably produce is a feeling
+of protection that does not match what is delivered, which is the failure mode
+this project is most concerned with avoiding.
+
+The honest advice: full-disk encryption on the machine, and do not type anything
+into a notes field you would not put in a plain file on the same disk.
+
+### Reaching a timestamp authority
+
+The in-app *Timestamp with an authority…* request will fail against most
+authorities, and the reason is worth stating so it is not mistaken for a defect
+in the chain.
+
+An RFC 3161 request must carry `Content-Type: application/timestamp-query`,
+which is not CORS-safelisted, so the browser sends a preflight first. Timestamp
+authorities are built for server-side callers and mostly answer no preflight at
+all. This blocks every web page, not only this one, and it cannot be fixed from
+the page's side.
+
+It is not worked around with a relay: proxying through a server would insert a
+third party between the user and the authority and would end the property this
+tool exists to have. Instead the token can be minted with `openssl ts` and
+pasted into the app, where it receives exactly the same verification —
+imprint binding, signed attributes, EKU, validity window, pinned-key CMS
+signature. Fetching was never the part carrying the security value.
+See [ANCHORING.md](ANCHORING.md).
 
 ### Deletion
 

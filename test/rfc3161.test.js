@@ -100,6 +100,63 @@ test('the same token verifies against the data it actually covers', async () => 
   assert.equal(result.verdict, VERDICT.VERIFIED, result.reason);
 });
 
+// ── The pasted-token path ──────────────────────────────────────────
+//
+// Most timestamp authorities cannot be reached from a browser at all: the
+// Content-Type an RFC 3161 request must carry is not CORS-safelisted, so the
+// request is preflighted, and authorities built for server-side callers answer
+// no preflight. So the token is minted with `openssl ts` and pasted in, and
+// that path verifies with no nonce to compare against — this page never made
+// the request that carried one.
+//
+// These tests exist to show that dropping the nonce check gives nothing away.
+// The imprint binding is what stops a token being moved onto a chain it does
+// not attest to, and it does not depend on the nonce.
+
+test('a token verifies with no nonce expectation — the pasted-token path', async () => {
+  const result = await verifyToken(load('response.tsr'), {
+    expectedDigest: headDigest,
+    pinnedSpki: PINS,
+  });
+  assert.equal(result.verdict, VERDICT.VERIFIED, result.reason);
+});
+
+test('without a nonce check, a token over other data is still INVALID', async () => {
+  // The one that matters. If the nonce were carrying the binding, this would
+  // pass here and the paste box would launder any genuine token onto any chain.
+  const result = await verifyToken(load('response-other.tsr'), {
+    expectedDigest: headDigest,
+    pinnedSpki: PINS,
+  });
+  assert.equal(result.verdict, VERDICT.INVALID);
+  assert.match(result.reason, /different data/);
+});
+
+test('without a nonce check, an unpinned signer is still UNVERIFIED', async () => {
+  const result = await verifyToken(load('response-rogue.tsr'), {
+    expectedDigest: headDigest,
+    pinnedSpki: PINS,
+  });
+  assert.equal(result.verdict, VERDICT.UNVERIFIED);
+  assert.match(result.reason, /pinned/);
+});
+
+test('a pasted token survives base64 armour and still verifies', async () => {
+  // End to end for what the box actually receives: bytes in, wrapped and
+  // armoured base64 back out, decoded by the same function the UI calls, and
+  // the verdict unchanged.
+  const { encodeToken, decodeToken } = await import('../src/anchor.js');
+  const pasted = `-----BEGIN TIMESTAMP TOKEN-----\n${
+    encodeToken(load('response.tsr')).replace(/(.{64})/g, '$1\n')
+  }\n-----END TIMESTAMP TOKEN-----`;
+
+  const decoded = decodeToken(pasted);
+  assert.deepEqual(decoded, load('response.tsr'));
+
+  const result = await verifyToken(decoded, { expectedDigest: headDigest, pinnedSpki: PINS });
+  assert.equal(result.verdict, VERDICT.VERIFIED, result.reason);
+});
+
 test('a genuine token from an unpinned TSA is UNVERIFIED, never VERIFIED', async () => {
   const result = await verify(load('response-rogue.tsr'));
   assert.equal(result.verdict, VERDICT.UNVERIFIED);

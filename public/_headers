@@ -9,12 +9,47 @@
 # an authenticated channel while leaving the choice of authority to the user.
 # If you deploy this for an organisation with one known authority, replace it
 # with that origin — a narrower policy is strictly better where it is possible.
+# The reasoning, and why this is an accepted residual rather than an oversight,
+# is written up in docs/PENTEST.md.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src https: ; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; manifest-src 'self'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src https: ; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; manifest-src 'self'; worker-src 'none'; child-src 'none'; media-src 'none'; upgrade-insecure-requests
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Permissions-Policy: accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=(), interest-cohort=()
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
   X-Frame-Options: DENY
   Strict-Transport-Security: max-age=63072000; includeSubDomains
+
+  # Deliberately absent: Cross-Origin-Embedder-Policy: require-corp.
+  # Nothing here needs crossOriginIsolated, and require-corp changes how
+  # cross-origin responses are accepted — including the timestamp request. It
+  # would be added risk in exchange for a capability this app does not use.
+  #
+  # Deliberately absent: the HSTS `preload` token. Preloading is a commitment
+  # made at the apex domain and is hard to reverse; claiming it here without
+  # submitting fiae.dev would be a claim that is not true.
+
+  # Explicitly 0, not 1. The legacy XSS auditor is removed from modern browsers
+  # and its heuristics could themselves be abused; scanners flag its absence
+  # either way, so state the intent rather than leave it ambiguous.
+  X-XSS-Protection: 0
+
+# The entry point must not be cached, or a browser can keep running a build
+# from before a security fix. The asset filenames are content-hashed, so the
+# HTML is the only thing that needs to stay fresh.
+/
+  Cache-Control: no-cache, must-revalidate
+/index.html
+  Cache-Control: no-cache, must-revalidate
+
+# Content-hashed filenames: a change produces a new name, so these are safe to
+# cache indefinitely and can never serve stale code under an old name.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# RFC 9116 requires text/plain, and it must not be cached for long — the
+# Expires field inside it has to be renewable.
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=3600

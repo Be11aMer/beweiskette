@@ -163,19 +163,42 @@ export function buildTimestampRequest(digest) {
 export async function requestTimestamp(tsaUrl, digest, { fetchImpl = fetch, signal } = {}) {
   const { der, nonce } = buildTimestampRequest(digest);
 
-  const response = await fetchImpl(tsaUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/timestamp-query',
-      Accept: 'application/timestamp-reply',
-    },
-    body: der,
-    signal,
-    // No credentials, no cookies: this is an anonymous request for a signature.
-    credentials: 'omit',
-    referrerPolicy: 'no-referrer',
-    cache: 'no-store',
-  });
+  let response;
+  try {
+    response = await fetchImpl(tsaUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/timestamp-query',
+        Accept: 'application/timestamp-reply',
+      },
+      body: der,
+      signal,
+      // No credentials, no cookies: this is an anonymous request for a signature.
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-store',
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw err;
+
+    // A cross-origin fetch blocked by CORS rejects with an opaque TypeError —
+    // the browser deliberately withholds the reason. "Failed to fetch" tells
+    // the user nothing, and this is the overwhelmingly likely cause: the
+    // Content-Type this request must send forces a preflight, and RFC 3161
+    // authorities are built for server-side clients, so most send no CORS
+    // headers at all and cannot be called from a browser by anyone.
+    //
+    // Say so, and point at the route that does work, rather than leaving
+    // someone to conclude the tool is broken.
+    throw new Error(
+      `Could not reach ${tsaUrl}. Browsers require the authority to send CORS headers `
+      + '(Access-Control-Allow-Origin), and most timestamp authorities do not, because they '
+      + 'are designed to be called by servers rather than by pages. This is a limitation of '
+      + 'the authority, not of your chain. Timestamp the head receipt with `openssl ts` '
+      + 'instead — see docs/ANCHORING.md — then paste the token into the box below. It is '
+      + 'verified exactly as a directly-fetched one would be.',
+    );
+  }
 
   if (!response.ok) {
     throw new Error(`Timestamp authority returned HTTP ${response.status}`);
