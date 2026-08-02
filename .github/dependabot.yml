@@ -1,0 +1,26 @@
+version: 2
+
+# Monthly, not weekly, and deliberately so. This project has one dev dependency
+# (Vite) and no runtime dependencies at all — the constraint the CI guard job
+# exists to enforce. Weekly checks against that surface produce a stream of
+# pull requests nobody reads, and an ignored bot is worse than no bot: it
+# trains you to dismiss the one update that mattered.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+
+  # The workflow's actions are pinned to major version tags rather than commit
+  # SHAs (see docs/PENTEST.md for why that is accepted here). Keeping those tags
+  # current is the part of the mitigation that can be automated.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(ci)'

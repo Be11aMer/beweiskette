@@ -224,10 +224,27 @@ export function encodeToken(bytes) {
   return btoa(binary);
 }
 
-/** Decode a stored token back to bytes. Returns null if unreadable. */
+/**
+ * Decode a token back to bytes. Returns null if unreadable.
+ *
+ * Tolerant about its input because this also handles what a person pastes in,
+ * not only what the app previously stored. `base64` without `-w0` wraps at 76
+ * columns, and PEM-style armour is what you get from anything that went
+ * through `openssl base64`. Neither changes the bytes, so rejecting them would
+ * be pedantry that reads as a broken feature.
+ *
+ * It stays strict about the alphabet: whitespace and armour are stripped, and
+ * anything else is left for atob to refuse. This decodes; it does not vouch for
+ * the result being a timestamp token.
+ */
 export function decodeToken(base64) {
   try {
-    const binary = atob(String(base64));
+    const cleaned = String(base64)
+      .replace(/-----(BEGIN|END)[^-]*-----/g, '')
+      .replace(/\s+/g, '');
+    if (!cleaned) return null;
+
+    const binary = atob(cleaned);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return bytes;

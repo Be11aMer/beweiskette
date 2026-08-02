@@ -1,0 +1,8 @@
+# The app is a single static page. There is no user content to crawl — chains
+# live in the visitor's own browser and are never uploaded — so there is nothing
+# to disallow. This file exists mainly so its absence stops being reported.
+#
+# Note that /.well-known/security.txt is deliberately left crawlable: a contact
+# address nobody can find does not do its job.
+User-agent: *
+Allow: /

@@ -38,6 +38,14 @@ Anything that breaks a property the tool *does* claim:
 - Any network request made by the application.
 - A chain that fails verification despite never having been modified.
 
+## Testing it
+
+If you are testing this deliberately rather than reporting something you
+tripped over, read [docs/PENTEST.md](docs/PENTEST.md) first. It sets out the
+target, what is worth attacking, the residual risks already accepted and why,
+and the one environmental limitation that looks like a broken feature and is
+not.
+
 ## Reporting
 
 Open a [GitHub issue](https://github.com/Be11aMer/beweiskette/issues).

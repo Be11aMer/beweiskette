@@ -4,7 +4,7 @@
 
 import { getAllEntries, getAnchors, putAnchor } from '../store.js';
 import { verifyChain } from '../chain.js';
-import { buildReceipt, formatReceipt, createAnchorRecord, anchorCoverage, encodeToken, ANCHOR_METHOD } from '../anchor.js';
+import { buildReceipt, formatReceipt, createAnchorRecord, anchorCoverage, encodeToken, decodeToken, ANCHOR_METHOD } from '../anchor.js';
 import { requestTimestamp, verifyToken, VERDICT } from '../rfc3161.js';
 import { getTsaSettings } from '../settings.js';
 import { formatDate, truncateHash, formatFileSize, html } from '../utils.js';
@@ -146,6 +146,23 @@ export async function render(container) {
           <button class="btn btn-secondary btn-small" id="timestamp-btn">Timestamp with an authority…</button>
         </div>
         <div id="timestamp-result"></div>
+
+        <div class="mt-12">
+          <label class="form-label" for="token-input">Or paste a timestamp token</label>
+          <p class="receipt-hint">
+            A browser can only reach an authority that sends CORS headers, and most do not —
+            they are built for server-side clients, so the request above fails against them.
+            That is a property of the authority, not of your chain. Timestamp this receipt with
+            <span class="mono">openssl ts</span> (see docs/ANCHORING.md) and paste the base64
+            token here: it is checked exactly as one fetched directly would be.
+          </p>
+          <textarea class="form-textarea mono-input" id="token-input" rows="4"
+            placeholder="base64 of a .tsr TimeStampResp or a bare TimeStampToken"></textarea>
+          <div class="btn-group mt-12">
+            <button class="btn btn-secondary btn-small" id="import-token-btn">Verify and store token</button>
+          </div>
+          <div id="import-token-result"></div>
+        </div>
       </div>
     ` : ''}
     <div class="chain-timeline">${entryFragments}</div>
@@ -163,6 +180,11 @@ export async function render(container) {
   const timestampBtn = container.querySelector('#timestamp-btn');
   if (timestampBtn) {
     timestampBtn.addEventListener('click', () => requestAndStoreTimestamp(receipt, container));
+  }
+
+  const importTokenBtn = container.querySelector('#import-token-btn');
+  if (importTokenBtn) {
+    importTokenBtn.addEventListener('click', () => importAndStoreToken(receipt, container));
   }
 
   const COPY_ICON = html`
@@ -216,7 +238,11 @@ async function requestAndStoreTimestamp(receipt, container) {
     + `Sends: the 32-byte SHA-256 of your chain head (${receipt.head_hash.slice(0, 16)}…)\n\n`
     + 'No file contents, file names, custody details or metadata are transmitted. '
     + 'The authority learns only that something was timestamped.\n\n'
-    + 'This is the only network request this application makes.',
+    + 'This is the only network request this application makes.\n\n'
+    + 'Note: a browser can only reach an authority that sends CORS headers, and most '
+    + 'do not — they are built for server-side clients. If this fails, that is the '
+    + 'authority, not your chain: timestamp the head receipt with `openssl ts` instead '
+    + '(docs/ANCHORING.md) and paste the token back in. It verifies identically.',
   );
   if (!consented) return;
 
@@ -232,42 +258,117 @@ async function requestAndStoreTimestamp(receipt, container) {
       expectedNonce: nonce,
     });
 
-    if (result.verdict === VERDICT.INVALID) {
-      resultDiv.innerHTML = html`
-        <div class="verify-entry fail mt-12">Timestamp rejected</div>
-        <div class="result-note">${result.reason}</div>
-      `;
-      return;
-    }
-
-    await putAnchor(createAnchorRecord({
-      receipt,
-      method: ANCHOR_METHOD.TSA,
-      token: encodeToken(token),
-      genTime: result.genTime,
-      status: result.verdict,
-    }));
-
-    const verified = result.verdict === VERDICT.VERIFIED;
-    resultDiv.innerHTML = html`
-      <div class="verify-entry ${verified ? 'pass' : 'fail'} mt-12">
-        ${verified ? 'Timestamp verified and stored' : 'Timestamp stored, but NOT verified'}
-      </div>
-      <div class="result-note">${result.reason}</div>
-      ${verified ? '' : html`
-        <div class="result-note">
-          Signer key: <span class="mono">${result.signerSpkiSha256 || 'unknown'}</span>.
-          Pin it under Export → Settings only after confirming it belongs to the authority
-          you intended, from a source other than the response itself.
-        </div>
-      `}
-    `;
+    await storeAndReport(receipt, token, result, resultDiv);
   } catch (err) {
     resultDiv.innerHTML = html`
       <div class="verify-entry fail mt-12">Could not obtain a timestamp</div>
       <div class="result-note">${err.message}</div>
     `;
   }
+}
+
+/**
+ * Verify a token the user obtained elsewhere and record it as an anchor.
+ *
+ * This path exists because the direct request usually cannot work. An RFC 3161
+ * request must carry Content-Type: application/timestamp-query, which is not
+ * CORS-safelisted, so the browser preflights it — and timestamp authorities are
+ * built for server-side callers and generally answer no preflight at all. That
+ * blocks every browser, not just this one.
+ *
+ * Fetching the token was never the part carrying the security value. The
+ * verification is, and it is identical here: same message-imprint binding, same
+ * signed attributes, same pinned-key signature check. Without this path that
+ * verifier would be unreachable in production, which would make the whole
+ * RFC 3161 implementation decorative.
+ *
+ * No nonce is expected. A token minted by `openssl ts` carries a nonce this
+ * page never saw, so there is nothing to compare it against — and a token that
+ * predates the paste is exactly what is wanted. Replay is not a threat here:
+ * the token is bound to the head hash, and a token for a *different* head is
+ * caught by the imprint check.
+ */
+async function importAndStoreToken(receipt, container) {
+  const resultDiv = container.querySelector('#import-token-result');
+  const input = container.querySelector('#token-input');
+  const settings = getTsaSettings();
+
+  if (!String(input.value || '').trim()) {
+    resultDiv.innerHTML = html`
+      <div class="result-note spaced">Paste a base64 token first.</div>
+    `;
+    return;
+  }
+
+  // decodeToken tolerates wrapped lines and PEM armour — see src/anchor.js.
+  const token = decodeToken(input.value);
+  if (!token || token.length === 0) {
+    resultDiv.innerHTML = html`
+      <div class="verify-entry fail mt-12">Not valid base64</div>
+      <div class="result-note">
+        Expected the base64 of a DER timestamp response — for example the output of
+        <span class="mono">base64 -w0 token.tsr</span>.
+      </div>
+    `;
+    return;
+  }
+
+  try {
+    const digest = hexToBytes(receipt.head_hash);
+    const result = await verifyToken(token, {
+      expectedDigest: digest,
+      pinnedSpki: settings.pins,
+    });
+
+    await storeAndReport(receipt, token, result, resultDiv);
+    if (result.verdict !== VERDICT.INVALID) input.value = '';
+  } catch (err) {
+    resultDiv.innerHTML = html`
+      <div class="verify-entry fail mt-12">Could not read the token</div>
+      <div class="result-note">${err.message}</div>
+    `;
+  }
+}
+
+/**
+ * Record a verified-or-unverified token and say which it was.
+ *
+ * INVALID is not stored. UNVERIFIED is, and is labelled as such — "could not be
+ * checked" is a state worth keeping, because the token may become checkable
+ * later once its signer is pinned. Collapsing it into either neighbour would
+ * throw that away.
+ */
+async function storeAndReport(receipt, token, result, resultDiv) {
+  if (result.verdict === VERDICT.INVALID) {
+    resultDiv.innerHTML = html`
+      <div class="verify-entry fail mt-12">Timestamp rejected</div>
+      <div class="result-note">${result.reason}</div>
+    `;
+    return;
+  }
+
+  await putAnchor(createAnchorRecord({
+    receipt,
+    method: ANCHOR_METHOD.TSA,
+    token: encodeToken(token),
+    genTime: result.genTime,
+    status: result.verdict,
+  }));
+
+  const verified = result.verdict === VERDICT.VERIFIED;
+  resultDiv.innerHTML = html`
+    <div class="verify-entry ${verified ? 'pass' : 'fail'} mt-12">
+      ${verified ? 'Timestamp verified and stored' : 'Timestamp stored, but NOT verified'}
+    </div>
+    <div class="result-note">${result.reason}</div>
+    ${verified ? '' : html`
+      <div class="result-note">
+        Signer key: <span class="mono">${result.signerSpkiSha256 || 'unknown'}</span>.
+        Pin it under Export → Settings only after confirming it belongs to the authority
+        you intended, from a source other than the response itself.
+      </div>
+    `}
+  `;
 }
 
 function hexToBytes(hex) {

@@ -258,6 +258,31 @@ test('tokens survive the base64 round trip byte for byte', async () => {
   assert.equal(decodeToken('not base64!!'), null);
 });
 
+test('decodeToken accepts what people actually paste', async () => {
+  // The paste box is the route that works when the browser cannot reach an
+  // authority, so it has to survive the forms a token arrives in. `base64`
+  // wraps at 76 columns unless told not to, and anything routed through
+  // `openssl base64` arrives wearing PEM armour. Neither changes a byte, so
+  // rejecting them would present a working token as a broken one.
+  const { encodeToken, decodeToken } = await import('../src/anchor.js');
+  const bytes = crypto.getRandomValues(new Uint8Array(300));
+  const b64 = encodeToken(bytes);
+
+  const wrapped = b64.replace(/(.{76})/g, '$1\n');
+  assert.deepEqual(decodeToken(wrapped), bytes);
+
+  const armoured = `-----BEGIN TIMESTAMP TOKEN-----\n${wrapped}\n-----END TIMESTAMP TOKEN-----\n`;
+  assert.deepEqual(decodeToken(armoured), bytes);
+
+  assert.deepEqual(decodeToken(`  ${b64}  `), bytes);
+
+  // Tolerance stops at whitespace and armour. The alphabet is still the
+  // alphabet, and empty input is not an empty token.
+  assert.equal(decodeToken(''), null);
+  assert.equal(decodeToken('   \n  '), null);
+  assert.equal(decodeToken(`${b64}<script>`), null);
+});
+
 test('an anchor beyond the chain height is the truncation evidence, not noise', async () => {
   // Regression. anchorCoverage filters anchors above the chain height, which
   // is right for measuring coverage and wrong for detection: an anchor

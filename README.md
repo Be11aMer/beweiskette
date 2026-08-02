@@ -90,40 +90,56 @@ published anchor if the timing needs to hold up against someone who disputes it.
    it omits metadata), or a self-contained HTML report that carries its own
    verification code and runs offline.
 
-## Chain Format v2
+## Chain Format v3
 
 Entries are hashed over a canonical JSON encoding — keys sorted by Unicode
 code point, no insignificant whitespace:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "chain_id": "3f2a1b8c-4d5e-4f60-8a1b-2c3d4e5f6071",
   "seq": 0,
   "id": "…",
   "timestamp_registered": "2026-07-24T09:31:04.117Z",
-  "evidence":  { "file_hash": "…", "file_name": "…", "file_size": 204800, … },
-  "metadata":  { "camera_make": "Canon", "gps_lat": "52.520008", … },
-  "custody":   { "custodian": "…", "case_reference": "…", "notes": "…" },
+  "evidence":   { "file_hash": "…", "file_name": "…", "file_size": 204800, … },
+  "metadata":   { "camera_make": "Canon", "gps_lat": "52.520008", … },
+  "custody":    { "custodian": "…", "case_reference": "…", "notes": "…" },
+  "time_bound": { "beacon": { "source": "…", "pulse_index": 1234567,
+                              "chain_index": 1, "output_value": "…",
+                              "pulse_time": "2026-07-24T09:30:00.000Z" } },
   "prev_hash": "GENESIS"
 }
 ```
 
 `entry_hash` is the digest of exactly those fields and is not part of its own
-preimage. The encoder **throws** rather than guess at any value it cannot
-represent unambiguously — a canonicalizer that silently coerces is a collision
-generator.
+preimage. The list is a **whitelist**, not "everything except `entry_hash`" — a
+blacklist would let any unexpected key an entry happens to carry silently join
+the digest, making what a hash commits to depend on the object's shape rather
+than on the format. The encoder **throws** rather than guess at any value it
+cannot represent unambiguously; a canonicalizer that silently coerces is a
+collision generator.
 
-> **v1 chains are not readable by this version.** `schema_version`, `seq` and
-> `chain_id` are covered by the digest, so v1 entries cannot be upgraded —
-> recomputing their hashes under v2 rules would be indistinguishable from
-> forging them. Existing v1 entries remain in the store and can be exported.
+`time_bound` is v3's addition: a randomness-beacon pulse establishing *no
+earlier than*. It is inside the digest deliberately — a bound attached after
+the fact proves nothing, because it could be chosen once the desired answer was
+known. It is `null` when no pulse was recorded.
+
+> **v2 chains still verify.** `HASHED_FIELDS_BY_VERSION` in `src/chain.js` maps
+> each version to its own field list, and every entry is hashed under the rules
+> it was created with. That is what stamping a version in-band was for; a second
+> breaking migration would have been the easy option.
+>
+> **v1 chains are not readable.** `schema_version`, `seq` and `chain_id` are
+> covered by the digest, so v1 entries cannot be upgraded — recomputing their
+> hashes under later rules would be indistinguishable from forging them.
+> Existing v1 entries remain in the store and can be exported.
 
 ## Security Properties
 
 | Property | Status |
 |---|---|
-| **Client-side only** | Files never leave the browser. No network request after load. Verifiable — there is no network code. |
+| **Client-side only** | Files never leave the browser. No network request happens on its own; the only one that exists is the optional timestamp query you trigger, carrying a 32-byte digest. |
 | **Content integrity** | Any change to any entry breaks verification at that entry. Hashes are recomputed, not compared. |
 | **Ordering integrity** | `seq` is covered by the digest; reordering and mid-chain deletion are detected directly. |
 | **Chain identity** | `chain_id` prevents splicing entries from two chains into one file. |
@@ -134,7 +150,8 @@ generator.
 | **Strict CSP** | `default-src 'none'`, no inline scripts, no inline styles, no `unsafe-eval`. See `public/_headers`. |
 | **Tail truncation** | **Not** detected without a published anchor receipt. |
 | **Whole-chain forgery** | **Not** detected. No signatures. Use an anchor. |
-| **Trusted timestamp** | Optional RFC 3161 anchoring. Tokens are verified in-browser — message imprint binding, signed messageDigest, timeStamping EKU, validity window, and the CMS signature — against **pinned** signer keys. |
+| **Trusted timestamp** | Optional RFC 3161 anchoring. Tokens are verified in-browser — message imprint binding, signed messageDigest, timeStamping EKU, validity window, and the CMS signature — against **pinned** signer keys. Tokens minted with `openssl ts` can be pasted in, which is the path that works against authorities that send no CORS headers. |
+| **Beacon lower bound** | A NIST randomness-beacon pulse recorded in `time_bound` proves an entry was made *no earlier than* that pulse. Combined with an anchor's *no later than*, an entry is bracketed rather than merely bounded. |
 | **Self-asserted time** | `timestamp_registered` proves nothing on its own. The clock belongs to whoever makes the records. |
 
 On constant-time comparison: `constantTimeEqual` is used consistently, but it
@@ -254,7 +271,9 @@ they are complete, or that their contents are true.
 ## Contributing
 
 Issues and pull requests are welcome, though see the status note at the top —
-responses may be slow. Security reports: [SECURITY.md](SECURITY.md).
+responses may be slow. Security reports: [SECURITY.md](SECURITY.md). If you are
+attacking it deliberately, [docs/PENTEST.md](docs/PENTEST.md) says what is worth
+your time and which limitations are already known.
 
 ## License
 

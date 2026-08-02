@@ -1,0 +1,13 @@
+# Beweiskette — https://beweiskette.fiae.dev
+#
+# Reference implementation, not a maintained product. See SECURITY.md in the
+# repository for what is and is not considered a vulnerability here — several
+# properties people expect from a chain-of-custody tool are deliberately not
+# provided, and those are documented limitations rather than bugs.
+
+Contact: https://github.com/Be11aMer/beweiskette/security/advisories/new
+Expires: 2027-07-29T00:00:00.000Z
+Preferred-Languages: en, de
+Canonical: https://beweiskette.fiae.dev/.well-known/security.txt
+Policy: https://github.com/Be11aMer/beweiskette/blob/main/SECURITY.md
+Acknowledgments: https://github.com/Be11aMer/beweiskette/blob/main/SECURITY.md
