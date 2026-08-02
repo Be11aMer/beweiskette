@@ -28,7 +28,7 @@ jobs:
     steps:
       # No job here pushes, so the checkout token has no reason to stay in the
       # runner's git config after this step.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -79,7 +79,7 @@ jobs:
     steps:
       # No job here pushes, so the checkout token has no reason to stay in the
       # runner's git config after this step.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -103,7 +103,7 @@ jobs:
     steps:
       # No job here pushes, so the checkout token has no reason to stay in the
       # runner's git config after this step.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Reject inline styles in application source
